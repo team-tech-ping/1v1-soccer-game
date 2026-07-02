@@ -1,0 +1,40 @@
+// 전역 설정: 화면 크기, 물리 상수 등.
+// MVP 단계에서 값들을 한곳에서 조정할 수 있도록 모아둔다.
+
+export const GAME_WIDTH = 960; // 뷰포트(카메라) 가로
+export const GAME_HEIGHT = 540;
+
+// 월드(필드): 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
+export const WORLD_WIDTH = GAME_WIDTH * 3; // 2880
+
+export const BACKGROUND_COLOR = "#1b263b";
+
+// 물리 (Arcade)
+export const GRAVITY_Y = 1200;
+
+// 필드
+export const GROUND_HEIGHT = 48;
+export const GROUND_COLOR = 0x2a9d8f;
+
+// 플레이어
+export const PLAYER_WIDTH = 48;
+export const PLAYER_HEIGHT = 72;
+export const PLAYER_COLOR = 0x4cc9f0;
+export const PLAYER_SPEED = 340; // 좌우 이동 속도(px/s)
+export const PLAYER_JUMP_VELOCITY = -650; // 점프 초기 속도(px/s, 위쪽이 음수)
+
+// 공
+export const BALL_RADIUS = 22;
+export const BALL_COLOR = 0xf1faee;
+export const BALL_BOUNCE = 0.82; // 반발 계수
+export const BALL_DRAG_X = 60; // 굴러갈 때 수평 감속(마찰 근사)
+export const BALL_MASS = 0.5; // 플레이어보다 가벼워 잘 밀리도록
+export const BALL_KICK_LIFT = 320; // 충돌 시 위로 떠오르는 속도(px/s) — 포물선
+export const BALL_MIN_KICK_SPEED = 220; // 충돌 시 최소 수평 발사 속도(px/s)
+export const BALL_KICK_COOLDOWN_MS = 180; // 접촉 중 재발동 방지 쿨다운
+
+// 골대 (필드 양 끝)
+export const GOAL_WIDTH = 50; // 골 감지 영역 가로(px)
+export const GOAL_HEIGHT = 240; // 골대 높이(바닥부터, px)
+export const GOAL_POST_COLOR = 0xffffff; // 골포스트/크로스바 색
+export const GOAL_COOLDOWN_MS = 1000; // 득점 후 재판정 방지
