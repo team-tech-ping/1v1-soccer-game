@@ -38,3 +38,11 @@ export const GOAL_WIDTH = 50; // 골 감지 영역 가로(px)
 export const GOAL_HEIGHT = 240; // 골대 높이(바닥부터, px)
 export const GOAL_POST_COLOR = 0xffffff; // 골포스트/크로스바 색
 export const GOAL_COOLDOWN_MS = 1000; // 득점 후 재판정 방지
+
+// 네트워크 (온라인 1v1)
+export const SNAPSHOT_HZ = 20; // host→guest 상태 스냅샷 전송 빈도
+export const INPUT_HZ = 30; // guest→host 입력 전송 빈도
+export const INTERP_DELAY_MS = 100; // guest 보간 렌더 지연(과거 시점 렌더)
+export const ROOM_CODE_LENGTH = 4;
+// 혼동 문자(0/O, 1/I) 제외한 대문자+숫자
+export const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
