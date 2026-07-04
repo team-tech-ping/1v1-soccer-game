@@ -2,3 +2,8 @@ node_modules
 dist
 .DS_Store
 *.local
+.env
+.env.local
+
+# 이 프로젝트는 yarn(yarn.lock)을 사용한다. npm 잔재 lockfile 방지.
+package-lock.json
