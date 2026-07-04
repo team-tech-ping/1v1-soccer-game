@@ -41,9 +41,13 @@ export class HomeScene extends Phaser.Scene {
     const roomParam = params.get("room");
     if (roomParam) {
       const code = normalizeRoomCode(roomParam);
-      this.info.setText(`방 ${code} 입장 중...`);
-      void this.enterRoom(code, "guest");
-      return;
+      if (code.length === 0) {
+        this.info.setText("잘못된 초대 링크입니다");
+      } else {
+        this.info.setText(`방 ${code} 입장 중...`);
+        void this.enterRoom(code, "guest");
+        return;
+      }
     }
 
     this.buildLobbyUi();

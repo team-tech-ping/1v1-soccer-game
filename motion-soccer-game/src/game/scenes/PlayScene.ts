@@ -9,7 +9,6 @@ import {
   GOAL_COOLDOWN_MS,
   SNAPSHOT_HZ,
   INPUT_HZ,
-  INTERP_DELAY_MS,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -152,7 +151,10 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
 
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.motion.stop());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.motion.stop();
+      if (this.session) void this.session.channel.leave();
+    });
 
     // 모션 시작(비동기). 준비될 때까지는 키보드로 조작 가능.
     void this.startMotion();
@@ -167,7 +169,7 @@ export class PlayScene extends Phaser.Scene {
       } else if (this.mode === "guest") {
         // host 스냅샷 수신 → 보간 버퍼에 push
         ch.on(EV_SNAPSHOT, (p) => {
-          if (isSnapshot(p)) this.guestView.push(p);
+          if (isSnapshot(p)) this.guestView.push(p, performance.now());
         });
         // guest는 로컬 물리 시뮬을 끈다(위치는 스냅샷으로 덮어씀)
         this.physics.world.pause();
@@ -288,7 +290,7 @@ export class PlayScene extends Phaser.Scene {
     }
 
     // 보간 렌더(과거 시점)
-    const s = this.guestView.sample(now - INTERP_DELAY_MS);
+    const s = this.guestView.render(now);
     if (s) {
       this.player1.applyState(s.p1.x, s.p1.y, s.p1.vx, s.p1.vy);
       this.player2.applyState(s.p2.x, s.p2.y, s.p2.vx, s.p2.vy);
