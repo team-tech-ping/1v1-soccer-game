@@ -7,6 +7,9 @@ import {
   PLAYER_HEIGHT,
   PLAYER2_COLOR,
   GOAL_COOLDOWN_MS,
+  SNAPSHOT_HZ,
+  INPUT_HZ,
+  INTERP_DELAY_MS,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -14,6 +17,20 @@ import { Player } from "../entities/Player";
 import { Goal, type GoalSide } from "../entities/Goal";
 import { createEmptyInputState, type InputState } from "../../input/InputState";
 import { MotionController } from "../../motion/MotionController";
+import type { RoomSession } from "../../net/RoomSession";
+import {
+  buildSnapshot,
+  messageToInput,
+  inputToMessage,
+  GuestView,
+  type WorldReadout,
+} from "../../net/sync";
+import {
+  EV_SNAPSHOT,
+  EV_INPUT,
+  isSnapshot,
+  isGuestInput,
+} from "../../net/protocol";
 
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
@@ -37,8 +54,21 @@ export class PlayScene extends Phaser.Scene {
   private scoreRight = 0;
   private lastGoalAt = 0;
 
+  private session: RoomSession | null = null;
+  private mode: "host" | "guest" | "local" = "local";
+  private guestView = new GuestView();
+  private remoteInput: InputState = createEmptyInputState();
+  private inputSeq = 0;
+  private lastSnapshotAt = 0;
+  private lastInputSentAt = 0;
+
   constructor() {
     super("Play");
+  }
+
+  init(data: { session?: RoomSession }): void {
+    this.session = data.session ?? null;
+    this.mode = this.session ? this.session.role : "local";
   }
 
   create(): void {
@@ -126,6 +156,23 @@ export class PlayScene extends Phaser.Scene {
 
     // 모션 시작(비동기). 준비될 때까지는 키보드로 조작 가능.
     void this.startMotion();
+
+    if (this.session) {
+      const ch = this.session.channel;
+      if (this.mode === "host") {
+        // guest 입력 수신 → player2 입력으로 사용
+        ch.on(EV_INPUT, (p) => {
+          if (isGuestInput(p)) this.remoteInput = messageToInput(p);
+        });
+      } else if (this.mode === "guest") {
+        // host 스냅샷 수신 → 보간 버퍼에 push
+        ch.on(EV_SNAPSHOT, (p) => {
+          if (isSnapshot(p)) this.guestView.push(p);
+        });
+        // guest는 로컬 물리 시뮬을 끈다(위치는 스냅샷으로 덮어씀)
+        this.physics.world.pause();
+      }
+    }
   }
 
   private async startMotion(): Promise<void> {
@@ -137,8 +184,18 @@ export class PlayScene extends Phaser.Scene {
 
   update(): void {
     const now = performance.now();
-    this.player1.update(this.resolveInput(now));
-    this.player2.update(this.readWasd());
+
+    if (this.mode === "guest") {
+      this.updateGuest(now);
+    } else {
+      // host 또는 local
+      this.player1.update(this.resolveInput(now));
+      const p2Input = this.mode === "host" ? this.remoteInput : this.readWasd();
+      this.player2.update(p2Input);
+
+      if (this.mode === "host") this.maybeSendSnapshot(now);
+    }
+
     this.updateStatus();
 
     if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
@@ -148,6 +205,7 @@ export class PlayScene extends Phaser.Scene {
 
   // 공이 골 영역에 들어오면 해당 스코어를 올리고 공을 중앙으로 리셋.
   private onGoal(side: GoalSide): void {
+    if (this.mode === "guest") return; // 점수는 host 권위
     const now = this.time.now;
     if (now - this.lastGoalAt < GOAL_COOLDOWN_MS) return;
     this.lastGoalAt = now;
@@ -184,13 +242,62 @@ export class PlayScene extends Phaser.Scene {
     return input;
   }
 
-  // 임시: player2 로컬 조작(다음 태스크에서 네트워크 입력으로 교체)
+  // local 모드 전용: player2 로컬 조작(WASD)
   private readWasd(): InputState {
     const input = createEmptyInputState();
     input.moveLeft = this.wasd.A.isDown;
     input.moveRight = this.wasd.D.isDown;
     input.jump = Phaser.Input.Keyboard.JustDown(this.wasd.W);
     return input;
+  }
+
+  // host: 일정 주기로 현재 월드 상태를 스냅샷으로 전송.
+  private maybeSendSnapshot(now: number): void {
+    const interval = 1000 / SNAPSHOT_HZ;
+    if (now - this.lastSnapshotAt < interval) return;
+    this.lastSnapshotAt = now;
+
+    const w = this.readWorld();
+    this.session!.channel.send(EV_SNAPSHOT, buildSnapshot(w, now));
+  }
+
+  // host: 스프라이트/게임 상태에서 스냅샷용 값을 읽는다.
+  private readWorld(): WorldReadout {
+    const b1 = this.player1.sprite.body as Phaser.Physics.Arcade.Body;
+    const b2 = this.player2.sprite.body as Phaser.Physics.Arcade.Body;
+    const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
+    return {
+      p1: { x: this.player1.sprite.x, y: this.player1.sprite.y, vx: b1.velocity.x, vy: b1.velocity.y, facing: this.player1.facing },
+      p2: { x: this.player2.sprite.x, y: this.player2.sprite.y, vx: b2.velocity.x, vy: b2.velocity.y, facing: this.player2.facing },
+      ball: { x: this.ball.sprite.x, y: this.ball.sprite.y, vx: bb.velocity.x, vy: bb.velocity.y },
+      scoreL: this.scoreLeft,
+      scoreR: this.scoreRight,
+      clockMs: 0, // 경기 시계는 후속(명세 2.3) — 현재 0
+      phase: "playing",
+    };
+  }
+
+  // guest: 로컬 입력 전송 + 보간된 스냅샷을 스프라이트에 적용.
+  private updateGuest(now: number): void {
+    // 로컬 입력 전송(주기 제한)
+    const interval = 1000 / INPUT_HZ;
+    if (now - this.lastInputSentAt >= interval) {
+      this.lastInputSentAt = now;
+      const input = this.resolveInput(now);
+      this.session!.channel.send(EV_INPUT, inputToMessage(input, this.inputSeq++));
+    }
+
+    // 보간 렌더(과거 시점)
+    const s = this.guestView.sample(now - INTERP_DELAY_MS);
+    if (s) {
+      this.player1.applyState(s.p1.x, s.p1.y, s.p1.vx, s.p1.vy);
+      this.player2.applyState(s.p2.x, s.p2.y, s.p2.vx, s.p2.vy);
+      this.ball.sprite.setPosition(s.ball.x, s.ball.y);
+      this.ball.sprite.setVelocity(s.ball.vx, s.ball.vy);
+      this.scoreLeft = s.scoreL;
+      this.scoreRight = s.scoreR;
+      this.updateScoreboard();
+    }
   }
 
   private updateStatus(): void {
