@@ -5,6 +5,7 @@ import {
   WORLD_WIDTH,
   GROUND_HEIGHT,
   PLAYER_HEIGHT,
+  PLAYER2_COLOR,
   GOAL_COOLDOWN_MS,
 } from "../../config";
 import { Field } from "../entities/Field";
@@ -21,10 +22,12 @@ import { MotionController } from "../../motion/MotionController";
 export class PlayScene extends Phaser.Scene {
   private field!: Field;
   private ball!: Ball;
-  private player!: Player;
+  private player1!: Player;
+  private player2!: Player;
   private goals: Goal[] = [];
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private resetKey!: Phaser.Input.Keyboard.Key;
+  private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
 
   private motion = new MotionController();
   private statusText!: Phaser.GameObjects.Text;
@@ -47,7 +50,8 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, groundTop);
 
     this.field = new Field(this);
-    this.player = new Player(this, WORLD_WIDTH * 0.5 - 120, groundTop - PLAYER_HEIGHT);
+    this.player1 = new Player(this, WORLD_WIDTH * 0.5 - 120, groundTop - PLAYER_HEIGHT);
+    this.player2 = new Player(this, WORLD_WIDTH * 0.5 + 120, groundTop - PLAYER_HEIGHT, PLAYER2_COLOR);
     this.ball = new Ball(this, WORLD_WIDTH * 0.5, groundTop - 200);
 
     // 양 끝 골대
@@ -57,13 +61,17 @@ export class PlayScene extends Phaser.Scene {
     ];
 
     // 충돌 설정
-    this.physics.add.collider(this.player.sprite, this.field.ground);
+    for (const p of [this.player1, this.player2]) {
+      this.physics.add.collider(p.sprite, this.field.ground);
+      this.physics.add.collider(p.sprite, this.ball.sprite, () => {
+        // 충돌 시 공을 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
+        const body = p.sprite.body as Phaser.Physics.Arcade.Body;
+        this.ball.kick(p.sprite.x, body.velocity.x);
+      });
+    }
     this.physics.add.collider(this.ball.sprite, this.field.ground);
-    this.physics.add.collider(this.player.sprite, this.ball.sprite, () => {
-      // 충돌 시 공을 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
-      const playerBody = this.player.sprite.body as Phaser.Physics.Arcade.Body;
-      this.ball.kick(this.player.sprite.x, playerBody.velocity.x);
-    });
+    // 캐릭터 간 충돌 (명세 2.4.2)
+    this.physics.add.collider(this.player1.sprite, this.player2.sprite);
 
     // 공이 골 영역에 들어오면 득점
     for (const goal of this.goals) {
@@ -83,6 +91,7 @@ export class PlayScene extends Phaser.Scene {
     keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C).on("down", () => {
       this.motion.calibrate();
     });
+    this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
 
     // HUD: 카메라에 고정(스크롤 무시)
     this.statusText = this.add
@@ -128,8 +137,8 @@ export class PlayScene extends Phaser.Scene {
 
   update(): void {
     const now = performance.now();
-    const input = this.resolveInput(now);
-    this.player.update(input);
+    this.player1.update(this.resolveInput(now));
+    this.player2.update(this.readWasd());
     this.updateStatus();
 
     if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
@@ -149,7 +158,8 @@ export class PlayScene extends Phaser.Scene {
     this.updateScoreboard();
     this.cameras.main.flash(200, 255, 255, 255);
     this.ball.reset();
-    this.player.reset();
+    this.player1.reset();
+    this.player2.reset();
     // 데드존 때문에 공 리셋만으로는 카메라가 안 돌아오므로 중앙으로 즉시 이동.
     this.cameras.main.centerOn(WORLD_WIDTH / 2, GAME_HEIGHT / 2);
   }
@@ -171,6 +181,15 @@ export class PlayScene extends Phaser.Scene {
     input.moveLeft = this.cursors.left.isDown;
     input.moveRight = this.cursors.right.isDown;
     input.jump = Phaser.Input.Keyboard.JustDown(this.cursors.up);
+    return input;
+  }
+
+  // 임시: player2 로컬 조작(다음 태스크에서 네트워크 입력으로 교체)
+  private readWasd(): InputState {
+    const input = createEmptyInputState();
+    input.moveLeft = this.wasd.A.isDown;
+    input.moveRight = this.wasd.D.isDown;
+    input.jump = Phaser.Input.Keyboard.JustDown(this.wasd.W);
     return input;
   }
 

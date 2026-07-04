@@ -20,6 +20,7 @@ export const GROUND_COLOR = 0x2a9d8f;
 export const PLAYER_WIDTH = 48;
 export const PLAYER_HEIGHT = 72;
 export const PLAYER_COLOR = 0x4cc9f0;
+export const PLAYER2_COLOR = 0xff6b6b; // 오른쪽(guest) 플레이어 색
 export const PLAYER_SPEED = 340; // 좌우 이동 속도(px/s)
 export const PLAYER_JUMP_VELOCITY = -650; // 점프 초기 속도(px/s, 위쪽이 음수)
 
