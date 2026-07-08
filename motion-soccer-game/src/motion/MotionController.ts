@@ -58,6 +58,10 @@ export class MotionController {
   get video(): HTMLVideoElement {
     return this.camera.video;
   }
+  // 획득한 웹캠 스트림(카메라 시작 성공 시 non-null). WebRTC 카메라 공유가 재사용한다.
+  get stream(): MediaStream | null {
+    return this.camera.stream;
+  }
 
   // 매 프레임 호출. nowMs는 단조 증가해야 한다(VIDEO 모드 요구).
   poll(nowMs: number): InputState {

@@ -30,6 +30,9 @@ import {
   isSnapshot,
   isGuestInput,
 } from "../../net/protocol";
+import { SignalingClient } from "../../webrtc/SignalingClient";
+import { CameraShare } from "../../webrtc/CameraShare";
+import { VideoOverlay } from "../../webrtc/VideoOverlay";
 
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
@@ -54,6 +57,7 @@ export class PlayScene extends Phaser.Scene {
   private lastGoalAt = 0;
 
   private session: RoomSession | null = null;
+  private roomCode: string | null = null;
   private mode: "host" | "guest" | "local" = "local";
   private guestView = new GuestView();
   private remoteInput: InputState = createEmptyInputState();
@@ -61,12 +65,19 @@ export class PlayScene extends Phaser.Scene {
   private lastSnapshotAt = 0;
   private lastInputSentAt = 0;
 
+  // WebRTC 카메라 공유
+  private signaling: SignalingClient | null = null;
+  private cameraShare: CameraShare | null = null;
+  private localOverlay: VideoOverlay | null = null;
+  private remoteOverlay: VideoOverlay | null = null;
+
   constructor() {
     super("Play");
   }
 
-  init(data: { session?: RoomSession }): void {
+  init(data: { session?: RoomSession; roomCode?: string }): void {
     this.session = data.session ?? null;
+    this.roomCode = data.roomCode ?? null;
     this.mode = this.session ? this.session.role : "local";
   }
 
@@ -153,6 +164,10 @@ export class PlayScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.motion.stop();
+      this.cameraShare?.stop();
+      this.signaling?.close();
+      this.localOverlay?.remove();
+      this.remoteOverlay?.remove();
       if (this.session) void this.session.channel.leave();
     });
 
@@ -179,9 +194,44 @@ export class PlayScene extends Phaser.Scene {
 
   private async startMotion(): Promise<void> {
     await this.motion.start();
-    if (this.motion.ready) {
+    // 온라인이면 내/상대 웹캠은 VideoOverlay로 표시하므로 모션 프리뷰는 로컬 모드에서만.
+    if (this.motion.ready && !this.session) {
       this.motion.attachPreview();
     }
+    // 온라인 + 웹캠 확보 시 카메라 공유 시작(모션 인식 실패해도 스트림만 있으면 공유 가능).
+    const stream = this.motion.stream;
+    if (this.session && this.roomCode && stream) {
+      this.startCameraShare(stream);
+    }
+  }
+
+  // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
+  // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
+  private startCameraShare(localStream: MediaStream): void {
+    // 내 화면(자기 자신)은 항상 표시.
+    this.localOverlay = new VideoOverlay({ id: "cam-local", corner: "right", label: "나", mirror: true });
+    this.localOverlay.setStream(localStream);
+
+    const url = import.meta.env.VITE_SIGNAL_URL;
+    if (!url) {
+      console.warn("[camera-share] VITE_SIGNAL_URL 미설정 — 상대 카메라 공유 비활성");
+      return;
+    }
+
+    this.remoteOverlay = new VideoOverlay({ id: "cam-remote", corner: "left", label: "상대", mirror: false });
+
+    const signaling = new SignalingClient(url, this.roomCode!);
+    const isInitiator = this.mode === "host";
+    const share = new CameraShare(signaling, isInitiator);
+    share.onRemoteStream((s) => this.remoteOverlay!.setStream(s));
+
+    this.signaling = signaling;
+    this.cameraShare = share;
+
+    signaling
+      .connect()
+      .then(({ peerPresent }) => share.start(localStream, peerPresent))
+      .catch((e) => console.warn("[camera-share]", e));
   }
 
   update(): void {
