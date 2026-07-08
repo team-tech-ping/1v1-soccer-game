@@ -13,7 +13,7 @@ export class CameraAccessError extends Error {
 // 웹캠 비디오 스트림을 획득하고 권한/오류를 처리한다.
 export class CameraSource {
   public readonly video: HTMLVideoElement;
-  private stream: MediaStream | null = null;
+  private _stream: MediaStream | null = null;
 
   constructor() {
     this.video = document.createElement("video");
@@ -22,9 +22,14 @@ export class CameraSource {
     this.video.autoplay = true;
   }
 
+  // 획득한 웹캠 스트림. WebRTC 카메라 공유가 이 스트림을 재사용한다(getUserMedia 중복 호출 방지).
+  get stream(): MediaStream | null {
+    return this._stream;
+  }
+
   async start(): Promise<void> {
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      this._stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: MotionConfig.cameraWidth,
           height: MotionConfig.cameraHeight,
@@ -36,14 +41,14 @@ export class CameraSource {
       throw this.classify(e);
     }
 
-    this.video.srcObject = this.stream;
+    this.video.srcObject = this._stream;
     await this.video.play();
     await this.waitForData();
   }
 
   stop(): void {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.stream = null;
+    this._stream?.getTracks().forEach((t) => t.stop());
+    this._stream = null;
     this.video.srcObject = null;
   }
 

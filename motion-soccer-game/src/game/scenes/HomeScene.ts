@@ -84,7 +84,7 @@ export class HomeScene extends Phaser.Scene {
       const channel = createSupabaseChannel(code);
       const session = new RoomSession(channel, role);
       session.onReady(() => {
-        this.scene.start("Play", { session });
+        this.scene.start("Play", { session, roomCode: code });
       });
       await session.start();
     } catch (e) {
