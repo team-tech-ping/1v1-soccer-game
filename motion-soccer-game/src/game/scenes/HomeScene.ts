@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { generateRoomCode, normalizeRoomCode } from "../../net/roomCode";
 import { createSupabaseChannel } from "../../net/SupabaseChannel";
 import { RoomSession, type Role } from "../../net/RoomSession";
+import { MatchmakingClient } from "../../webrtc/MatchmakingClient";
 
 // 시작 화면: 방 만들기(host) / 코드 입장(guest). 명세 5.1.
 // 캔버스 위에 '중앙 정렬 카드' 하나(DOM)를 올려 레이아웃을 flexbox로 처리한다.
@@ -39,6 +40,14 @@ const CSS = `
   background: transparent; border: 1px solid rgba(255, 255, 255, 0.18); color: #e0e1dd;
 }
 .msg-home-secondary:hover { background: rgba(255, 255, 255, 0.07); }
+.msg-home-ghost { background: transparent; border: 1px solid rgba(255, 255, 255, 0.18); color: #e0e1dd; }
+.msg-home-ghost:hover { background: rgba(255, 255, 255, 0.07); }
+.msg-home-spinner {
+  width: 30px; height: 30px; margin: 8px auto 2px;
+  border: 3px solid rgba(255, 255, 255, 0.15); border-top-color: #4cc9f0;
+  border-radius: 50%; animation: msg-home-spin 0.8s linear infinite;
+}
+@keyframes msg-home-spin { to { transform: rotate(360deg); } }
 .msg-home-divider { display: flex; align-items: center; gap: 10px; color: #5f7189; font-size: 12px; margin: 18px 0; }
 .msg-home-divider::before, .msg-home-divider::after { content: ""; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1); }
 .msg-home-row { display: flex; gap: 8px; }
@@ -63,6 +72,7 @@ const CSS = `
 
 export class HomeScene extends Phaser.Scene {
   private overlay: HTMLDivElement | null = null;
+  private matchmaker: MatchmakingClient | null = null;
 
   constructor() {
     super("Home");
@@ -88,18 +98,26 @@ export class HomeScene extends Phaser.Scene {
     this.renderLobby();
   }
 
-  // 초기 로비: 방 만들기 / 코드 입장.
+  // 초기 로비: 빠른 매칭 / 방 만들기 / 코드 입장.
   private renderLobby(errorMsg?: string): void {
     const card = this.mountCard();
     card.appendChild(this.el("h1", "msg-home-title", "모션 축구 1v1"));
     card.appendChild(this.el("p", "msg-home-sub", "웹캠 모션으로 즐기는 실시간 1대1 축구"));
 
-    const createBtn = this.el("button", "msg-home-btn msg-home-primary", "방 만들기") as HTMLButtonElement;
+    // 빠른(랜덤) 매칭 — 메인 액션
+    const quickBtn = this.el("button", "msg-home-btn msg-home-primary", "⚡ 빠른 매칭") as HTMLButtonElement;
+    quickBtn.onclick = () => this.onQuickMatch();
+    card.appendChild(quickBtn);
+
+    card.appendChild(this.el("div", "msg-home-divider", "친구와 하기"));
+
+    // 방 만들기
+    const createBtn = this.el("button", "msg-home-btn msg-home-ghost", "방 만들기") as HTMLButtonElement;
     createBtn.onclick = () => this.onCreate();
+    createBtn.style.marginBottom = "8px";
     card.appendChild(createBtn);
 
-    card.appendChild(this.el("div", "msg-home-divider", "또는"));
-
+    // 코드 입장
     const row = this.el("div", "msg-home-row");
     const input = this.el("input", "msg-home-input") as HTMLInputElement;
     input.placeholder = "코드 입력";
@@ -115,7 +133,45 @@ export class HomeScene extends Phaser.Scene {
     card.appendChild(row);
 
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
-    input.focus();
+  }
+
+  // 랜덤 매칭 대기 화면 (취소 가능).
+  private renderMatching(): void {
+    const card = this.mountCard();
+    card.appendChild(this.el("h1", "msg-home-title", "상대 찾는 중…"));
+    card.appendChild(this.el("p", "msg-home-sub", "랜덤 매칭 대기 중"));
+    card.appendChild(this.el("div", "msg-home-spinner"));
+
+    const cancelBtn = this.el("button", "msg-home-btn msg-home-ghost", "취소") as HTMLButtonElement;
+    cancelBtn.style.marginTop = "18px";
+    cancelBtn.onclick = () => {
+      this.matchmaker?.cancel();
+      this.matchmaker = null;
+      this.renderLobby();
+    };
+    card.appendChild(cancelBtn);
+  }
+
+  private onQuickMatch(): void {
+    const url = import.meta.env.VITE_SIGNAL_URL;
+    if (!url) {
+      this.renderLobby("매칭 서버(VITE_SIGNAL_URL)가 설정되지 않았습니다");
+      return;
+    }
+    this.renderMatching();
+    const mm = new MatchmakingClient(url);
+    this.matchmaker = mm;
+    mm
+      .start((result) => {
+        mm.cancel(); // 매칭 완료 → 매칭 소켓 정리
+        this.matchmaker = null;
+        this.renderWaiting("매칭 완료!", result.code, "연결하는 중…");
+        void this.enterRoom(result.code, result.role);
+      })
+      .catch((e) => {
+        this.matchmaker = null;
+        this.renderLobby(`매칭 실패: ${e instanceof Error ? e.message : String(e)}`);
+      });
   }
 
   // 대기 화면: 방 코드 + 초대 링크(복사) + 상대 대기.
@@ -205,6 +261,8 @@ export class HomeScene extends Phaser.Scene {
   }
 
   private cleanup(): void {
+    this.matchmaker?.cancel();
+    this.matchmaker = null;
     this.overlay?.remove();
     this.overlay = null;
   }

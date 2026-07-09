@@ -1,12 +1,14 @@
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { RoomHub, type Peer } from "./rooms";
+import { MatchQueue } from "./matchmaking";
 
 // http 서버에 ws를 얹는다.
 //  - GET 요청은 200("signaling ok") — Railway 헬스체크 + 상태 확인용
-//  - ws 연결은 방 참가/시그널링 중계에 사용
+//  - ws 연결은 방 참가/시그널링 중계 + 랜덤 매칭 큐에 사용
 export function createSignalingServer(): http.Server {
   const hub = new RoomHub();
+  const queue = new MatchQueue();
 
   const server = http.createServer((req, res) => {
     if (req.method === "GET") {
@@ -52,10 +54,24 @@ export function createSignalingServer(): http.Server {
         hub.signal(peer, m.payload);
         return;
       }
+
+      if (m.t === "queue") {
+        queue.enqueue(peer);
+        return;
+      }
+
+      if (m.t === "cancel") {
+        queue.remove(peer);
+        return;
+      }
     });
 
-    socket.on("close", () => hub.leave(peer));
-    socket.on("error", () => hub.leave(peer));
+    const cleanup = () => {
+      queue.remove(peer);
+      hub.leave(peer);
+    };
+    socket.on("close", cleanup);
+    socket.on("error", cleanup);
   });
 
   return server;
