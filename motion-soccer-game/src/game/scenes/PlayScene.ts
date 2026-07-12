@@ -32,7 +32,6 @@ import {
 } from "../../net/protocol";
 import { SignalingClient } from "../../webrtc/SignalingClient";
 import { CameraShare } from "../../webrtc/CameraShare";
-import { VideoOverlay } from "../../webrtc/VideoOverlay";
 import { FaceMaskPipeline } from "../../filter/FaceMaskPipeline";
 import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 
@@ -52,6 +51,8 @@ export class PlayScene extends Phaser.Scene {
 
   private motion = new MotionController();
   private statusText!: Phaser.GameObjects.Text;
+  private fpsText!: Phaser.GameObjects.Text;
+  private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
 
   private scoreLeft = 0;
@@ -70,8 +71,9 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC 카메라 공유
   private signaling: SignalingClient | null = null;
   private cameraShare: CameraShare | null = null;
-  private localOverlay: VideoOverlay | null = null;
-  private remoteOverlay: VideoOverlay | null = null;
+  private localCam: Phaser.GameObjects.Video | null = null;
+  private remoteCam: Phaser.GameObjects.Video | null = null;
+  private overlaysActive = true;
   private faceMask: FaceMaskPipeline | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
@@ -144,13 +146,24 @@ export class PlayScene extends Phaser.Scene {
       this.motion.calibrate();
     });
     this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
+    // 진단용: V 키로 카메라 오버레이 On/Off (디코드/합성 비용 격리)
+    keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.V).on("down", () => this.toggleOverlays());
 
-    // HUD: 카메라에 고정(스크롤 무시)
+    // HUD: 카메라에 고정(스크롤 무시). 좌상단 카메라에 가리지 않도록 그 아래에 배치.
     this.statusText = this.add
-      .text(24, 20, "모션: 초기화 중...", {
+      .text(24, 156, "모션: 초기화 중...", {
         fontFamily: "monospace",
         fontSize: "15px",
         color: "#ffd166",
+      })
+      .setScrollFactor(0);
+
+    // 진단용 FPS 미터 — 실제 렌더 루프 프레임레이트를 표시.
+    this.fpsText = this.add
+      .text(24, 178, "FPS --", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#90e0ef",
       })
       .setScrollFactor(0);
 
@@ -179,8 +192,7 @@ export class PlayScene extends Phaser.Scene {
       this.faceMask?.stop();
       this.cameraShare?.stop();
       this.signaling?.close();
-      this.localOverlay?.remove();
-      this.remoteOverlay?.remove();
+      // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음).
       if (this.session) void this.session.channel.leave();
     });
 
@@ -207,7 +219,7 @@ export class PlayScene extends Phaser.Scene {
 
   private async startMotion(): Promise<void> {
     await this.motion.start();
-    // 온라인이면 내/상대 웹캠은 VideoOverlay로 표시하므로 모션 프리뷰는 로컬 모드에서만.
+    // 온라인이면 내/상대 웹캠은 캔버스 비디오로 표시하므로 모션 프리뷰는 로컬 모드에서만.
     if (this.motion.ready && !this.session) {
       this.motion.attachPreview();
     }
@@ -235,13 +247,12 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
   // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
   private startCameraShare(localStream: MediaStream): void {
-    // 내 화면(자기 자신)은 항상 표시. 원본(비반전) 영상은 마주보는 카메라 특성상
-    // 물리적으로 오른쪽으로 움직이면 화면에선 왼쪽으로 나타난다. 반면 캐릭터 조작은
-    // "물리적 오른쪽 → 캐릭터 오른쪽"으로 매핑돼 있으므로, 화면 방향과 캐릭터 방향을
-    // 맞추려면 거울 반전이 정확히 한 번 필요하다 — 이 CSS 반전이 그 한 번이다
-    // (canvas 자체(AnimalMaskRenderer)는 반전하지 않은 원본 그대로 유지).
-    this.localOverlay = new VideoOverlay({ id: "cam-local", corner: "right", label: "나", mirror: true });
-    this.localOverlay.setStream(localStream);
+    // 내 화면(자기 자신)은 항상 표시. 캔버스 안 텍스처로 렌더 → DOM 합성 비용 회피.
+    // 거울 반전(setFlipX): 마주보는 카메라 원본은 물리적 오른쪽이 화면 왼쪽으로 나타나는데,
+    // 캐릭터 조작은 "물리적 오른쪽 → 캐릭터 오른쪽"으로 매핑돼 있으므로 화면과 캐릭터 방향을
+    // 맞추려면 반전이 정확히 한 번 필요하다(필터 canvas 원본은 반전 안 함 — 여기서 한 번만).
+    // 내/상대 둘 다 거울로 통일해 같은 방향으로 움직이게 한다.
+    this.localCam = this.addCamVideo(localStream, "right", true, "나");
 
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
@@ -249,12 +260,17 @@ export class PlayScene extends Phaser.Scene {
       return;
     }
 
-    this.remoteOverlay = new VideoOverlay({ id: "cam-remote", corner: "left", label: "상대", mirror: false });
-
     const signaling = new SignalingClient(url, this.roomCode!);
     const isInitiator = this.mode === "host";
     const share = new CameraShare(signaling, isInitiator);
-    share.onRemoteStream((s) => this.remoteOverlay!.setStream(s));
+    share.onRemoteStream((s) => {
+      if (this.remoteCam) {
+        this.remoteCam.loadMediaStream(s, true);
+        this.remoteCam.play();
+      } else {
+        this.remoteCam = this.addCamVideo(s, "left", true, "상대");
+      }
+    });
 
     this.signaling = signaling;
     this.cameraShare = share;
@@ -265,8 +281,57 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
-  update(): void {
+  // 웹캠 스트림을 Phaser 캔버스 안 코너 비디오로 그린다(DOM <video> 오버레이 대신 텍스처).
+  private addCamVideo(
+    stream: MediaStream,
+    corner: "left" | "right",
+    mirror: boolean,
+    label: string
+  ): Phaser.GameObjects.Video {
+    const W = 180;
+    const margin = 16;
+    const y = 78;
+    const x = corner === "left" ? margin + W / 2 : GAME_WIDTH - margin - W / 2;
+    const v = this.add.video(x, y).setScrollFactor(0).setDepth(1000).setOrigin(0.5);
+    if (mirror) v.setFlipX(true);
+    v.on("textureready", () => {
+      const el = v.video;
+      const vw = (el && el.videoWidth) || 4;
+      const vh = (el && el.videoHeight) || 3;
+      v.setDisplaySize(W, (W * vh) / vw);
+    });
+    v.loadMediaStream(stream, true);
+    v.play();
+
+    // 누구 화면인지 라벨(비디오 위쪽 가장자리에 오버레이).
+    this.add
+      .text(x, y - 64, label, {
+        fontFamily: "sans-serif",
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: "#e0e1dd",
+        backgroundColor: "#00000099",
+        padding: { x: 6, y: 2 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+    return v;
+  }
+
+  private toggleOverlays(): void {
+    this.overlaysActive = !this.overlaysActive;
+    this.localCam?.setVisible(this.overlaysActive);
+    this.remoteCam?.setVisible(this.overlaysActive);
+  }
+
+  update(_time: number, delta: number): void {
     const now = performance.now();
+
+    // 실제 프레임레이트(EMA). delta는 직전 프레임 소요 ms.
+    this.fps = this.fps * 0.9 + (1000 / Math.max(delta, 1)) * 0.1;
+    this.fpsText.setText(`FPS ${this.fps.toFixed(0)}`);
+
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
 
