@@ -32,7 +32,6 @@ import {
 } from "../../net/protocol";
 import { SignalingClient } from "../../webrtc/SignalingClient";
 import { CameraShare } from "../../webrtc/CameraShare";
-import { VideoOverlay } from "../../webrtc/VideoOverlay";
 
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
@@ -50,6 +49,8 @@ export class PlayScene extends Phaser.Scene {
 
   private motion = new MotionController();
   private statusText!: Phaser.GameObjects.Text;
+  private fpsText!: Phaser.GameObjects.Text;
+  private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
 
   private scoreLeft = 0;
@@ -68,8 +69,9 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC 카메라 공유
   private signaling: SignalingClient | null = null;
   private cameraShare: CameraShare | null = null;
-  private localOverlay: VideoOverlay | null = null;
-  private remoteOverlay: VideoOverlay | null = null;
+  private localCam: Phaser.GameObjects.Video | null = null;
+  private remoteCam: Phaser.GameObjects.Video | null = null;
+  private overlaysActive = true;
 
   constructor() {
     super("Play");
@@ -132,13 +134,25 @@ export class PlayScene extends Phaser.Scene {
       this.motion.calibrate();
     });
     this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
+    // 진단용: V 키로 카메라 오버레이 On/Off (디코드/합성 비용 격리)
+    keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.V).on("down", () => this.toggleOverlays());
 
     // HUD: 카메라에 고정(스크롤 무시)
+    // 좌상단 카메라(상대)에 가리지 않도록 그 아래에 배치.
     this.statusText = this.add
-      .text(24, 20, "모션: 초기화 중...", {
+      .text(24, 156, "모션: 초기화 중...", {
         fontFamily: "monospace",
         fontSize: "15px",
         color: "#ffd166",
+      })
+      .setScrollFactor(0);
+
+    // 진단용 FPS 미터 — 실제 렌더 루프 프레임레이트를 표시.
+    this.fpsText = this.add
+      .text(24, 178, "FPS --", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#90e0ef",
       })
       .setScrollFactor(0);
 
@@ -166,8 +180,7 @@ export class PlayScene extends Phaser.Scene {
       this.motion.stop();
       this.cameraShare?.stop();
       this.signaling?.close();
-      this.localOverlay?.remove();
-      this.remoteOverlay?.remove();
+      // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음).
       if (this.session) void this.session.channel.leave();
     });
 
@@ -208,9 +221,8 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
   // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
   private startCameraShare(localStream: MediaStream): void {
-    // 내 화면(자기 자신)은 항상 표시.
-    this.localOverlay = new VideoOverlay({ id: "cam-local", corner: "right", label: "나", mirror: true });
-    this.localOverlay.setStream(localStream);
+    // 내 화면(자기 자신)은 항상 표시. 캔버스 안 텍스처로 렌더 → DOM 합성 비용 회피.
+    this.localCam = this.addCamVideo(localStream, "right", true, "나");
 
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
@@ -218,12 +230,17 @@ export class PlayScene extends Phaser.Scene {
       return;
     }
 
-    this.remoteOverlay = new VideoOverlay({ id: "cam-remote", corner: "left", label: "상대", mirror: false });
-
     const signaling = new SignalingClient(url, this.roomCode!);
     const isInitiator = this.mode === "host";
     const share = new CameraShare(signaling, isInitiator);
-    share.onRemoteStream((s) => this.remoteOverlay!.setStream(s));
+    share.onRemoteStream((s) => {
+      if (this.remoteCam) {
+        this.remoteCam.loadMediaStream(s, true);
+        this.remoteCam.play();
+      } else {
+        this.remoteCam = this.addCamVideo(s, "left", true, "상대");
+      }
+    });
 
     this.signaling = signaling;
     this.cameraShare = share;
@@ -234,8 +251,50 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
-  update(): void {
+  // 웹캠 스트림을 Phaser 캔버스 안 코너 비디오로 그린다(DOM <video> 오버레이 대신 텍스처).
+  private addCamVideo(
+    stream: MediaStream,
+    corner: "left" | "right",
+    mirror: boolean,
+    label: string
+  ): Phaser.GameObjects.Video {
+    const W = 180;
+    const margin = 16;
+    const y = 78;
+    const x = corner === "left" ? margin + W / 2 : GAME_WIDTH - margin - W / 2;
+    const v = this.add.video(x, y).setScrollFactor(0).setDepth(1000).setOrigin(0.5);
+    if (mirror) v.setFlipX(true);
+    v.on("textureready", () => {
+      const el = v.video;
+      const vw = (el && el.videoWidth) || 4;
+      const vh = (el && el.videoHeight) || 3;
+      v.setDisplaySize(W, (W * vh) / vw);
+    });
+    v.loadMediaStream(stream, true);
+    v.play();
+
+    // 누구 화면인지 라벨(비디오 위쪽 가장자리에 오버레이). setFlipX의 영향을 안 받도록 별도 오브젝트.
+    this.add
+      .text(x, y - 64, label, {
+        fontFamily: "sans-serif",
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: "#e0e1dd",
+        backgroundColor: "#00000099",
+        padding: { x: 6, y: 2 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+    return v;
+  }
+
+  update(_time: number, delta: number): void {
     const now = performance.now();
+
+    // 실제 프레임레이트(EMA). delta는 직전 프레임 소요 ms.
+    this.fps = this.fps * 0.9 + (1000 / Math.max(delta, 1)) * 0.1;
+    this.fpsText.setText(`FPS ${this.fps.toFixed(0)}`);
 
     if (this.mode === "guest") {
       this.updateGuest(now);
@@ -276,6 +335,12 @@ export class PlayScene extends Phaser.Scene {
 
   private updateScoreboard(): void {
     this.scoreText.setText(`◀ ${this.scoreLeft}   :   ${this.scoreRight} ▶`);
+  }
+
+  private toggleOverlays(): void {
+    this.overlaysActive = !this.overlaysActive;
+    this.localCam?.setVisible(this.overlaysActive);
+    this.remoteCam?.setVisible(this.overlaysActive);
   }
 
   // 모션이 준비되면 모션 입력을, 아니면 키보드 입력을 사용한다.

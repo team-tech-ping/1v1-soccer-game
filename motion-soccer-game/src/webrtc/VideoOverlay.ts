@@ -52,6 +52,14 @@ export class VideoOverlay {
     void this.video.play();
   }
 
+  // 진단용: 오버레이를 완전히 끄고(숨김+정지) 켠다. 디코드/합성 비용 격리에 사용.
+  setActive(active: boolean): void {
+    this.video.style.display = active ? "" : "none";
+    this.caption.style.display = active ? "" : "none";
+    if (active) void this.video.play();
+    else this.video.pause();
+  }
+
   remove(): void {
     this.video.srcObject = null;
     this.video.remove();

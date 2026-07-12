@@ -68,10 +68,30 @@ export class CameraShare {
 
   // 로컬 웹캠 트랙을 추가한다. 상대가 이미 방에 있으면 initiator는 즉시 offer.
   async start(localStream: MediaStream, peerAlreadyPresent: boolean): Promise<void> {
-    for (const track of localStream.getTracks()) {
-      this.pc.addTrack(track, localStream);
+    for (const track of localStream.getVideoTracks()) {
+      const sender = this.pc.addTrack(track, localStream);
+      await this.limitOutgoing(sender);
     }
     if (this.isInitiator && peerAlreadyPresent) await this.makeOffer();
+  }
+
+  // 전송 영상에 적당한 상한을 둔다(대역폭 위생용).
+  // 성능 문제는 수신측 렌더 방식(캔버스 텍스처)에서 해결하므로, 여기선 화질을 크게 깎지 않는다.
+  // 타일이 작아 초고화질은 불필요하지만, 부드럽게 보일 정도(30fps)는 유지한다.
+  // 로컬 카메라 트랙 자체는 건드리지 않으므로 MediaPipe 포즈 인식엔 영향 없음.
+  private async limitOutgoing(sender: RTCRtpSender): Promise<void> {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.encodings[0].maxBitrate = 700_000; // ~700 kbps
+    params.encodings[0].maxFramerate = 30;
+    params.encodings[0].scaleResolutionDownBy = 1.5; // 640x480 → ~427x320 (전송분만)
+    try {
+      await sender.setParameters(params);
+    } catch {
+      // 일부 브라우저는 일부 파라미터를 무시할 수 있다(치명적이지 않음).
+    }
   }
 
   private async makeOffer(): Promise<void> {
