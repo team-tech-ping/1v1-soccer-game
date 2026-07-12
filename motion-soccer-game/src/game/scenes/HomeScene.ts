@@ -3,6 +3,7 @@ import { generateRoomCode, normalizeRoomCode } from "../../net/roomCode";
 import { createSupabaseChannel } from "../../net/SupabaseChannel";
 import { RoomSession, type Role } from "../../net/RoomSession";
 import { MatchmakingClient } from "../../webrtc/MatchmakingClient";
+import { ANIMAL_MASKS, DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 
 // 시작 화면: 방 만들기(host) / 코드 입장(guest). 명세 5.1.
 // 캔버스 위에 '중앙 정렬 카드' 하나(DOM)를 올려 레이아웃을 flexbox로 처리한다.
@@ -68,11 +69,23 @@ const CSS = `
 }
 .msg-home-wait { margin-top: 18px; font-size: 13px; color: #8fa3bf; text-align: center; }
 .msg-home-error { margin-top: 16px; font-size: 13px; color: #ff8f8f; text-align: center; line-height: 1.5; }
+.msg-home-filter {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 16px 0 4px; font-size: 13px; color: #b8c4d9;
+}
+.msg-home-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.msg-home-filter select {
+  padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #0b1524; color: #e0e1dd; font-size: 13px;
+}
+.msg-home-filter select:disabled { opacity: 0.4; }
 `;
 
 export class HomeScene extends Phaser.Scene {
   private overlay: HTMLDivElement | null = null;
   private matchmaker: MatchmakingClient | null = null;
+  private filterEnabled = false;
+  private animalId = DEFAULT_ANIMAL_ID;
 
   constructor() {
     super("Home");
@@ -132,7 +145,42 @@ export class HomeScene extends Phaser.Scene {
     row.appendChild(joinBtn);
     card.appendChild(row);
 
+    card.appendChild(this.buildFilterControls());
+
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
+  }
+
+  // 상대에게 보이는 내 얼굴을 동물 마스크로 가리는 필터 ON/OFF + 종류 선택.
+  // 경기 전에만 바꿀 수 있고, 경기 중에는 고정된다(PlayScene에 값만 전달).
+  private buildFilterControls(): HTMLElement {
+    const row = this.el("div", "msg-home-filter");
+    const label = this.el("label", "msg-home-check") as HTMLLabelElement;
+    const checkbox = this.el("input", "") as HTMLInputElement;
+    checkbox.type = "checkbox";
+    checkbox.checked = this.filterEnabled;
+
+    const select = this.el("select", "") as HTMLSelectElement;
+    for (const animal of ANIMAL_MASKS) {
+      const opt = this.el("option", "", animal.label) as HTMLOptionElement;
+      opt.value = animal.id;
+      opt.selected = animal.id === this.animalId;
+      select.appendChild(opt);
+    }
+    select.disabled = !this.filterEnabled;
+
+    checkbox.onchange = () => {
+      this.filterEnabled = checkbox.checked;
+      select.disabled = !this.filterEnabled;
+    };
+    select.onchange = () => {
+      this.animalId = select.value;
+    };
+
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(" 얼굴 가리기 필터"));
+    row.appendChild(label);
+    row.appendChild(select);
+    return row;
   }
 
   // 랜덤 매칭 대기 화면 (취소 가능).
@@ -224,7 +272,12 @@ export class HomeScene extends Phaser.Scene {
       const channel = createSupabaseChannel(code);
       const session = new RoomSession(channel, role);
       session.onReady(() => {
-        this.scene.start("Play", { session, roomCode: code });
+        this.scene.start("Play", {
+          session,
+          roomCode: code,
+          filterEnabled: this.filterEnabled,
+          animalId: this.animalId,
+        });
       });
       await session.start();
     } catch (e) {

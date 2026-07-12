@@ -33,6 +33,8 @@ import {
 import { SignalingClient } from "../../webrtc/SignalingClient";
 import { CameraShare } from "../../webrtc/CameraShare";
 import { VideoOverlay } from "../../webrtc/VideoOverlay";
+import { FaceMaskPipeline } from "../../filter/FaceMaskPipeline";
+import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
@@ -70,15 +72,25 @@ export class PlayScene extends Phaser.Scene {
   private cameraShare: CameraShare | null = null;
   private localOverlay: VideoOverlay | null = null;
   private remoteOverlay: VideoOverlay | null = null;
+  private faceMask: FaceMaskPipeline | null = null;
+  private filterEnabled = false;
+  private animalId = DEFAULT_ANIMAL_ID;
 
   constructor() {
     super("Play");
   }
 
-  init(data: { session?: RoomSession; roomCode?: string }): void {
+  init(data: {
+    session?: RoomSession;
+    roomCode?: string;
+    filterEnabled?: boolean;
+    animalId?: string;
+  }): void {
     this.session = data.session ?? null;
     this.roomCode = data.roomCode ?? null;
     this.mode = this.session ? this.session.role : "local";
+    this.filterEnabled = data.filterEnabled ?? false;
+    this.animalId = data.animalId ?? DEFAULT_ANIMAL_ID;
   }
 
   create(): void {
@@ -164,6 +176,7 @@ export class PlayScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.motion.stop();
+      this.faceMask?.stop();
       this.cameraShare?.stop();
       this.signaling?.close();
       this.localOverlay?.remove();
@@ -200,15 +213,33 @@ export class PlayScene extends Phaser.Scene {
     }
     // 온라인 + 웹캠 확보 시 카메라 공유 시작(모션 인식 실패해도 스트림만 있으면 공유 가능).
     const stream = this.motion.stream;
-    if (this.session && this.roomCode && stream) {
+    if (!(this.session && this.roomCode && stream)) return;
+
+    if (!this.filterEnabled) {
       this.startCameraShare(stream);
+      return;
+    }
+
+    // 얼굴 필터 ON: 합성 스트림만 상대에게 보낸다. 초기화 실패 시 원본 얼굴이 나갈 바에야
+    // 카메라 공유 자체를 건너뛴다(프라이버시 보장이 조용히 깨지는 것을 방지).
+    try {
+      const pipeline = new FaceMaskPipeline(this.motion.video, this.animalId);
+      await pipeline.init();
+      this.faceMask = pipeline;
+      this.startCameraShare(pipeline.outputStream);
+    } catch (e) {
+      console.warn("[face-mask] 초기화 실패 — 원본 얼굴 노출 방지를 위해 카메라 공유를 건너뜁니다", e);
     }
   }
 
   // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
   // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
   private startCameraShare(localStream: MediaStream): void {
-    // 내 화면(자기 자신)은 항상 표시.
+    // 내 화면(자기 자신)은 항상 표시. 원본(비반전) 영상은 마주보는 카메라 특성상
+    // 물리적으로 오른쪽으로 움직이면 화면에선 왼쪽으로 나타난다. 반면 캐릭터 조작은
+    // "물리적 오른쪽 → 캐릭터 오른쪽"으로 매핑돼 있으므로, 화면 방향과 캐릭터 방향을
+    // 맞추려면 거울 반전이 정확히 한 번 필요하다 — 이 CSS 반전이 그 한 번이다
+    // (canvas 자체(AnimalMaskRenderer)는 반전하지 않은 원본 그대로 유지).
     this.localOverlay = new VideoOverlay({ id: "cam-local", corner: "right", label: "나", mirror: true });
     this.localOverlay.setStream(localStream);
 
@@ -236,6 +267,8 @@ export class PlayScene extends Phaser.Scene {
 
   update(): void {
     const now = performance.now();
+    // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
+    this.faceMask?.update(now);
 
     if (this.mode === "guest") {
       this.updateGuest(now);
