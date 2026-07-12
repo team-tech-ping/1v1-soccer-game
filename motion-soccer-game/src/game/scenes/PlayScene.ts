@@ -330,7 +330,11 @@ export class PlayScene extends Phaser.Scene {
 
     // 실제 프레임레이트(EMA). delta는 직전 프레임 소요 ms.
     this.fps = this.fps * 0.9 + (1000 / Math.max(delta, 1)) * 0.1;
-    this.fpsText.setText(`FPS ${this.fps.toFixed(0)}`);
+    let fpsLine = `FPS ${this.fps.toFixed(0)}`;
+    if (this.faceMask) {
+      fpsLine += `  얼굴 ${this.faceMask.lastInferenceMs.toFixed(0)}ms · 렌더 ${this.faceMask.lastRenderMs.toFixed(0)}ms`;
+    }
+    this.fpsText.setText(fpsLine);
 
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
