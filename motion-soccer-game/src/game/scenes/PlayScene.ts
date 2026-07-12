@@ -35,6 +35,9 @@ import { CameraShare } from "../../webrtc/CameraShare";
 import { FaceMaskPipeline } from "../../filter/FaceMaskPipeline";
 import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 
+// 캐릭터 머리 위 원형 카메라 지름(px). 나/상대 동일.
+const CAM_DIAMETER = 64;
+
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
 // - 양 끝 골대에 공이 들어가면 해당 스코어가 오른다.
@@ -149,9 +152,9 @@ export class PlayScene extends Phaser.Scene {
     // 진단용: V 키로 카메라 오버레이 On/Off (디코드/합성 비용 격리)
     keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.V).on("down", () => this.toggleOverlays());
 
-    // HUD: 카메라에 고정(스크롤 무시). 좌상단 카메라에 가리지 않도록 그 아래에 배치.
+    // HUD: 카메라에 고정(스크롤 무시).
     this.statusText = this.add
-      .text(24, 156, "모션: 초기화 중...", {
+      .text(24, 20, "모션: 초기화 중...", {
         fontFamily: "monospace",
         fontSize: "15px",
         color: "#ffd166",
@@ -160,7 +163,7 @@ export class PlayScene extends Phaser.Scene {
 
     // 진단용 FPS 미터 — 실제 렌더 루프 프레임레이트를 표시.
     this.fpsText = this.add
-      .text(24, 178, "FPS --", {
+      .text(24, 42, "FPS --", {
         fontFamily: "monospace",
         fontSize: "14px",
         color: "#90e0ef",
@@ -192,7 +195,9 @@ export class PlayScene extends Phaser.Scene {
       this.faceMask?.stop();
       this.cameraShare?.stop();
       this.signaling?.close();
-      // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음).
+      // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음). 마스크 그래픽만 명시적으로 정리.
+      (this.localCam?.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.destroy();
+      (this.remoteCam?.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.destroy();
       if (this.session) void this.session.channel.leave();
     });
 
@@ -247,12 +252,14 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
   // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
   private startCameraShare(localStream: MediaStream): void {
-    // 내 화면(자기 자신)은 항상 표시. 캔버스 안 텍스처로 렌더 → DOM 합성 비용 회피.
-    // 거울 반전(setFlipX): 마주보는 카메라 원본은 물리적 오른쪽이 화면 왼쪽으로 나타나는데,
-    // 캐릭터 조작은 "물리적 오른쪽 → 캐릭터 오른쪽"으로 매핑돼 있으므로 화면과 캐릭터 방향을
-    // 맞추려면 반전이 정확히 한 번 필요하다(필터 canvas 원본은 반전 안 함 — 여기서 한 번만).
-    // 내/상대 둘 다 거울로 통일해 같은 방향으로 움직이게 한다.
-    this.localCam = this.addCamVideo(localStream, "right", true, "나");
+    // 내 카메라를 내 캐릭터 머리 위에 표시. 캔버스 텍스처라 DOM 합성 비용 없음.
+    // 거울 반전(setFlipX): 마주보는 카메라 원본은 물리적 오른쪽이 화면 왼쪽으로 나타나는데
+    // 캐릭터 조작은 "물리적 오른쪽 → 캐릭터 오른쪽"이므로 방향을 맞추려면 반전이 한 번 필요.
+    // 역할별 '내/상대' 캐릭터 매핑(카메라·히트박스가 이 캐릭터를 따라간다).
+    const mine = this.mode === "guest" ? this.player2 : this.player1;
+    const opponent = this.mode === "guest" ? this.player1 : this.player2;
+
+    this.localCam = this.addCamVideo(localStream, true, mine);
 
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
@@ -268,7 +275,7 @@ export class PlayScene extends Phaser.Scene {
         this.remoteCam.loadMediaStream(s, true);
         this.remoteCam.play();
       } else {
-        this.remoteCam = this.addCamVideo(s, "left", true, "상대");
+        this.remoteCam = this.addCamVideo(s, true, opponent);
       }
     });
 
@@ -281,42 +288,70 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
-  // 웹캠 스트림을 Phaser 캔버스 안 코너 비디오로 그린다(DOM <video> 오버레이 대신 텍스처).
+  // 웹캠 스트림을 캐릭터 머리 위에 작게 그린다(Phaser 캔버스 텍스처 — DOM 오버레이 아님).
+  // scrollFactor 기본(1) → 월드를 따라 스크롤. 위치는 매 프레임 positionCameras()가 갱신.
   private addCamVideo(
     stream: MediaStream,
-    corner: "left" | "right",
     mirror: boolean,
-    label: string
+    owner: Player
   ): Phaser.GameObjects.Video {
-    const W = 180;
-    const margin = 16;
-    const y = 78;
-    const x = corner === "left" ? margin + W / 2 : GAME_WIDTH - margin - W / 2;
-    const v = this.add.video(x, y).setScrollFactor(0).setDepth(1000).setOrigin(0.5);
+    const D = CAM_DIAMETER; // 원 지름 — 나/상대 동일(보이는 원 크기가 곧 D라 항상 같다)
+    const v = this.add.video(0, 0).setDepth(50).setOrigin(0.5);
     if (mirror) v.setFlipX(true);
+    v.setData("owner", owner);
+
+    // 원형 크롭: 흰 원 geometry mask. 표시는 안 되고 스텐실로만 쓰인다.
+    const maskG = this.make.graphics();
+    maskG.fillStyle(0xffffff);
+    maskG.fillCircle(0, 0, D / 2);
+    v.setMask(maskG.createGeometryMask());
+    v.setData("mask", maskG);
+
+    // 머리 타격 판정: 원과 같은 크기의 물리 히트박스(무중력·immovable). 소유 캐릭터를 따라다니며
+    // 공과 충돌 시 소유 캐릭터 속도로 헤딩(플레이어 바디 kick과 동일). placeCam에서 매 프레임 이동.
+    const hit = this.add.circle(0, 0, D / 2).setVisible(false);
+    this.physics.add.existing(hit);
+    const hitBody = hit.body as Phaser.Physics.Arcade.Body;
+    hitBody.setCircle(D / 2);
+    hitBody.setAllowGravity(false);
+    hitBody.setImmovable(true);
+    this.physics.add.collider(this.ball.sprite, hit, () => {
+      const ob = owner.sprite.body as Phaser.Physics.Arcade.Body;
+      this.ball.kick(hit.x, ob.velocity.x);
+    });
+    v.setData("hit", hit);
+
     v.on("textureready", () => {
       const el = v.video;
       const vw = (el && el.videoWidth) || 4;
       const vh = (el && el.videoHeight) || 3;
-      v.setDisplaySize(W, (W * vh) / vw);
+      // 정사각을 '덮도록' 스케일(작은 변이 D). 넘치는 부분은 원형 마스크가 자름 → 왜곡 없음.
+      const scale = D / Math.min(vw, vh);
+      v.setDisplaySize(vw * scale, vh * scale);
     });
     v.loadMediaStream(stream, true);
     v.play();
-
-    // 누구 화면인지 라벨(비디오 위쪽 가장자리에 오버레이).
-    this.add
-      .text(x, y - 64, label, {
-        fontFamily: "sans-serif",
-        fontSize: "13px",
-        fontStyle: "bold",
-        color: "#e0e1dd",
-        backgroundColor: "#00000099",
-        padding: { x: 6, y: 2 },
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(1001);
     return v;
+  }
+
+  // 각 카메라(+마스크+히트박스)를 소유 캐릭터 머리 위로 이동(매 프레임).
+  private positionCameras(): void {
+    this.placeCam(this.localCam);
+    this.placeCam(this.remoteCam);
+  }
+
+  private placeCam(cam: Phaser.GameObjects.Video | null): void {
+    if (!cam) return;
+    const owner = cam.getData("owner") as Player;
+    const dy = PLAYER_HEIGHT / 2 + CAM_DIAMETER / 2 + 6; // 머리 위로 살짝
+    const x = owner.sprite.x;
+    const y = owner.sprite.y - dy;
+    cam.setPosition(x, y);
+    // 원형 마스크도 같은 위치로(안 그러면 마스크가 안 따라와 잘림).
+    (cam.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.setPosition(x, y);
+    // 히트박스도 머리 위치로(속도 0으로 고정). 공이 이 원에 부딪히면 위 collider가 헤딩 처리.
+    const hit = cam.getData("hit") as Phaser.GameObjects.Arc | undefined;
+    if (hit) (hit.body as Phaser.Physics.Arcade.Body).reset(x, y);
   }
 
   private toggleOverlays(): void {
@@ -350,6 +385,7 @@ export class PlayScene extends Phaser.Scene {
       if (this.mode === "host") this.maybeSendSnapshot(now);
     }
 
+    this.positionCameras();
     this.updateStatus();
 
     if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
