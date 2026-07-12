@@ -12,6 +12,10 @@ export class FaceMaskPipeline {
   private readonly renderer: AnimalMaskRenderer;
   private lastMatrix: Float32Array | null = null;
   private initialized = false;
+  private lastUpdateMs = -Infinity;
+  // 진단용: 마지막 얼굴 추론/Three 렌더 소요(ms)
+  public lastInferenceMs = 0;
+  public lastRenderMs = 0;
 
   constructor(
     private readonly video: HTMLVideoElement,
@@ -36,9 +40,15 @@ export class FaceMaskPipeline {
 
   update(nowMs: number): void {
     if (!this.initialized) return;
+    // 검출+렌더를 outputFps 수준으로 throttle (포즈 추론과 매 프레임 겹쳐 버벅이는 것 방지).
+    if (nowMs - this.lastUpdateMs < FilterConfig.updateIntervalMs) return;
+    this.lastUpdateMs = nowMs;
     const det = this.detector.detect(this.video, nowMs);
+    this.lastInferenceMs = det?.inferenceMs ?? 0;
     this.lastMatrix = pickTransform(det?.result ?? null, this.lastMatrix);
+    const t0 = performance.now();
     this.renderer.render(this.video, this.lastMatrix);
+    this.lastRenderMs = performance.now() - t0;
   }
 
   get outputStream(): MediaStream {
