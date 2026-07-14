@@ -16,15 +16,8 @@ export interface SquareCrop {
 }
 
 const DEFAULT_SIZE = 128;
-// 정사각형으로 자를 때 프레임 중앙을 이 배율만큼 더 당겨서(줌인) 크롭한다.
-// 1.0 = 짧은 변 전체(원본 그대로의 비율감), 클수록 얼굴이 원을 더 채운다.
-const DEFAULT_ZOOM = 1.4;
 
-export function cropToSquare(
-  source: MediaStream,
-  size: number = DEFAULT_SIZE,
-  zoom: number = DEFAULT_ZOOM
-): SquareCrop {
+export function cropToSquare(source: MediaStream, size: number = DEFAULT_SIZE): SquareCrop {
   const video = document.createElement("video");
   video.playsInline = true;
   video.muted = true;
@@ -41,7 +34,7 @@ export function cropToSquare(
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (vw > 0 && vh > 0) {
-      const side = Math.min(vw, vh) / zoom;
+      const side = Math.min(vw, vh);
       const sx = (vw - side) / 2;
       const sy = (vh - side) / 2;
       ctx.drawImage(video, sx, sy, side, side, 0, 0, size, size);
