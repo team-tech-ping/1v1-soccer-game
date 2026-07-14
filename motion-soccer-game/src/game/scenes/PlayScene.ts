@@ -34,7 +34,6 @@ import {
 } from "../../net/protocol";
 import { SignalingClient } from "../../webrtc/SignalingClient";
 import { CameraShare } from "../../webrtc/CameraShare";
-import { cropToSquare, type SquareCrop } from "../../webrtc/cropToSquare";
 import { FaceMaskPipeline } from "../../filter/FaceMaskPipeline";
 import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 
@@ -89,8 +88,6 @@ export class PlayScene extends Phaser.Scene {
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
-  // 로컬 미리보기·상대 전송 둘 다가 공유하는 정사각형 크롭(카메라별 비율 차이 제거).
-  private crop: SquareCrop | null = null;
 
   constructor() {
     super("Play");
@@ -134,7 +131,6 @@ export class PlayScene extends Phaser.Scene {
     this.overlaysActive = true;
     this.faceMask = null;
     this.filterToggleText = null;
-    this.crop = null;
   }
 
   create(): void {
@@ -269,7 +265,6 @@ export class PlayScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.motion.stop();
       this.faceMask?.stop();
-      this.crop?.stop();
       this.cameraShare?.stop();
       this.signaling?.close();
       // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음). 마스크 그래픽만 명시적으로 정리.
@@ -329,21 +324,14 @@ export class PlayScene extends Phaser.Scene {
   // WebRTC로 상대와 웹캠을 공유한다. 시그널링은 Railway(VITE_SIGNAL_URL)를 경유,
   // 영상은 P2P로 흐른다. host가 initiator(offer 생성).
   private startCameraShare(localStream: MediaStream): void {
-    // 카메라마다 원본 비율(4:3/16:9 등)이 달라 원형 확대 배율이 사람마다 달라 보이던
-    // 문제, 그리고 로컬 미리보기(원본)와 상대 전송(인코딩본)이 서로 다른 파이프라인을
-    // 거쳐 달라 보이던 문제를 한 번에 해결: 정사각형으로 미리 크롭해, 로컬 미리보기와
-    // 전송 스트림이 '같은 픽셀'에서 출발하게 한다. 화면엔 작은 원으로만 보이므로
-    // 원본 해상도를 그대로 보낼 필요도 없어 대역폭도 아낀다.
-    this.crop = cropToSquare(localStream, CAM_DIAMETER * 2);
-    const squareStream = this.crop.stream;
-
+    // 내 카메라를 내 캐릭터 머리 위에 표시. 캔버스 텍스처라 DOM 합성 비용 없음.
     // 거울 반전(setFlipX): 마주보는 카메라 원본은 물리적 오른쪽이 화면 왼쪽으로 나타나는데
     // 캐릭터 조작은 "물리적 오른쪽 → 캐릭터 오른쪽"이므로 방향을 맞추려면 반전이 한 번 필요.
     // 역할별 '내/상대' 캐릭터 매핑(카메라·히트박스가 이 캐릭터를 따라간다).
     const mine = this.mode === "guest" ? this.player2 : this.player1;
     const opponent = this.mode === "guest" ? this.player1 : this.player2;
 
-    this.localCam = this.addCamVideo(squareStream, true, mine);
+    this.localCam = this.addCamVideo(localStream, true, mine);
 
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
@@ -368,7 +356,7 @@ export class PlayScene extends Phaser.Scene {
 
     signaling
       .connect()
-      .then(({ peerPresent }) => share.start(squareStream, peerPresent))
+      .then(({ peerPresent }) => share.start(localStream, peerPresent))
       .catch((e) => console.warn("[camera-share]", e));
   }
 
@@ -385,12 +373,9 @@ export class PlayScene extends Phaser.Scene {
 
     const raw = this.motion.stream;
     if (raw) {
-      this.crop?.stop();
-      this.crop = cropToSquare(raw, CAM_DIAMETER * 2);
-      const squareStream = this.crop.stream;
-      this.localCam?.loadMediaStream(squareStream, true);
+      this.localCam?.loadMediaStream(raw, true);
       this.localCam?.play();
-      void this.cameraShare?.replaceStream(squareStream);
+      void this.cameraShare?.replaceStream(raw);
     }
   }
 
@@ -427,9 +412,14 @@ export class PlayScene extends Phaser.Scene {
     });
     v.setData("hit", hit);
 
-    // 입력은 cropToSquare()가 이미 정사각형으로 만들어 보낸 것이므로 그대로 채우면 된다
-    // (별도 비율 계산 불필요 — 카메라마다 원본 비율이 달라도 항상 동일하게 보임).
-    v.on("textureready", () => v.setDisplaySize(D, D));
+    v.on("textureready", () => {
+      const el = v.video;
+      const vw = (el && el.videoWidth) || 4;
+      const vh = (el && el.videoHeight) || 3;
+      // 정사각을 '덮도록' 스케일(작은 변이 D). 넘치는 부분은 원형 마스크가 자름 → 왜곡 없음.
+      const scale = D / Math.min(vw, vh);
+      v.setDisplaySize(vw * scale, vh * scale);
+    });
     v.loadMediaStream(stream, true);
     v.play();
     return v;
