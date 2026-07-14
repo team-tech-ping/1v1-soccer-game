@@ -39,6 +39,9 @@ export const HEAD_POWER_SCALE = 0.5;
 // 물리 스텝당 이동 거리를 충돌 판정 크기 이내로 유지한다(터널링 방지).
 export const BALL_MAX_VELOCITY_X = 900;
 export const BALL_MAX_VELOCITY_Y = 1400;
+// 플레이어가 공 위에 수직으로 올라탔을 때(스톰프) 옆으로 튕겨나가는 속도/높이.
+export const BALL_STOMP_SPEED = 320;
+export const BALL_STOMP_LIFT = 260;
 
 // 골대 (필드 양 끝)
 export const GOAL_WIDTH = 50; // 골 감지 영역 가로(px)

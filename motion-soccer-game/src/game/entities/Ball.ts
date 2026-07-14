@@ -10,7 +10,10 @@ import {
   BALL_KICK_COOLDOWN_MS,
   BALL_MAX_VELOCITY_X,
   BALL_MAX_VELOCITY_Y,
+  BALL_STOMP_SPEED,
+  BALL_STOMP_LIFT,
   HEAD_POWER_SCALE,
+  PLAYER_WIDTH,
 } from "../../config";
 
 const BALL_TEXTURE = "ball";
@@ -70,6 +73,19 @@ export class Ball {
     const { dir, outSpeed } = this.computeStrike(playerX, playerVelocityX);
     this.sprite.setVelocityX(dir * outSpeed * HEAD_POWER_SCALE);
     this.sprite.setVelocityY(-BALL_KICK_LIFT * HEAD_POWER_SCALE);
+  }
+
+  // 플레이어가 공 위에 수직으로 올라탔을 때(스톰프): 공이 발판처럼 버티지 못하도록
+  // 즉시 플레이어 발밑 밖으로 위치를 옮기고 튕겨낸다. 속도만 주면 다음 물리 스텝에서
+  // Arcade의 자동 겹침 보정이 공을 다시 발밑으로 되돌려 '올라탄' 상태가 재고정될 수
+  // 있어(레이스 컨디션), 위치 자체를 함께 밀어내 겹침을 원천적으로 없앤다.
+  stomp(playerX: number): void {
+    if (!this.canStrike()) return;
+    const dir = this.sprite.x >= playerX ? 1 : -1;
+    const escapeGap = PLAYER_WIDTH / 2 + BALL_RADIUS + 8;
+    this.sprite.setPosition(playerX + dir * escapeGap, this.sprite.y);
+    this.sprite.setVelocityX(dir * BALL_STOMP_SPEED);
+    this.sprite.setVelocityY(-BALL_STOMP_LIFT);
   }
 
   // 접촉 중 재발동 방지 쿨다운. 통과하면 true를 반환하며 타이머를 갱신한다.

@@ -4,6 +4,7 @@ import {
   GAME_HEIGHT,
   WORLD_WIDTH,
   GROUND_HEIGHT,
+  PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER2_COLOR,
   GOAL_COOLDOWN_MS,
@@ -129,9 +130,19 @@ export class PlayScene extends Phaser.Scene {
     for (const p of [this.player1, this.player2]) {
       this.physics.add.collider(p.sprite, this.field.ground);
       this.physics.add.collider(p.sprite, this.ball.sprite, () => {
-        // 충돌 시 공을 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
-        const body = p.sprite.body as Phaser.Physics.Arcade.Body;
-        this.ball.kick(p.sprite.x, body.velocity.x);
+        // 공이 플레이어 발밑에서 수직으로 떠받쳐지는 상태(위에 올라탐)인지 위치로 판별한다.
+        // (body.touching 플래그는 같은 스텝의 다른 콜라이더-예: 바닥-와 뒤섞일 수 있어
+        // 신뢰할 수 없다. 기하학적으로 '발밑 근처·아래'인지 직접 확인한다.)
+        const dx = Math.abs(this.ball.sprite.x - p.sprite.x);
+        const dy = this.ball.sprite.y - p.sprite.y; // 양수: 공이 플레이어보다 아래(발밑)
+        const standingOnBall = dy > PLAYER_HEIGHT * 0.25 && dx < PLAYER_WIDTH * 0.4;
+        if (standingOnBall) {
+          this.ball.stomp(p.sprite.x);
+        } else {
+          // 충돌 시 공을 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
+          const body = p.sprite.body as Phaser.Physics.Arcade.Body;
+          this.ball.kick(p.sprite.x, body.velocity.x);
+        }
       });
     }
     this.physics.add.collider(this.ball.sprite, this.field.ground);
