@@ -104,6 +104,33 @@ export class PlayScene extends Phaser.Scene {
     this.mode = this.session ? this.session.role : "local";
     this.filterEnabled = data.filterEnabled ?? false;
     this.animalId = data.animalId ?? DEFAULT_ANIMAL_ID;
+
+    // Phaser는 scene.start()를 다시 호출해도 씬 인스턴스를 새로 만들지 않고 재사용한다.
+    // 클래스 필드 초기값(= 0, null 등)은 객체 생성 시 단 한 번만 적용되므로, 두 번째
+    // 매치부터는 여기서 매치별 상태를 명시적으로 리셋하지 않으면 이전 매치의 점수·
+    // 종료 플래그·카메라 참조가 그대로 남는다(예: matchEnded가 true로 남으면 update()가
+    // 매 프레임 조기 리턴해 모션 상태 텍스트·카메라 배치가 다시는 갱신되지 않는다).
+    this.scoreLeft = 0;
+    this.scoreRight = 0;
+    this.lastGoalAt = 0;
+    this.matchEnded = false;
+    this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
+
+    this.guestView = new GuestView();
+    this.remoteInput = createEmptyInputState();
+    this.inputSeq = 0;
+    this.lastSnapshotAt = 0;
+    this.lastInputSentAt = 0;
+
+    // 이전 매치에서 만든 카메라/필터 관련 객체는 씬 SHUTDOWN 시 이미 정리(stop/close)됐거나
+    // Phaser가 파괴했다. 여기서 참조 자체를 비워 다음 매치가 항상 새로 만들게 한다.
+    this.signaling = null;
+    this.cameraShare = null;
+    this.localCam = null;
+    this.remoteCam = null;
+    this.overlaysActive = true;
+    this.faceMask = null;
+    this.filterToggleText = null;
   }
 
   create(): void {
