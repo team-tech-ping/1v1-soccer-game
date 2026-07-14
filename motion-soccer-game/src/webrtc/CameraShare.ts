@@ -87,16 +87,15 @@ export class CameraShare {
   }
 
   // 전송 영상에 적당한 상한을 둔다(대역폭 위생용).
-  // 성능 문제는 수신측 렌더 방식(캔버스 텍스처)에서 해결하므로 화질을 크게 깎지 않는다.
-  // 타일이 작아 초고화질은 불필요하지만 부드럽게 보일 정도(30fps)는 유지한다.
+  // 입력이 이미 cropToSquare()로 128x128 정사각형으로 잘려서 들어오므로(화면엔
+  // 그보다 더 작은 원으로 표시됨) 추가로 축소할 필요는 없다 — 비트레이트만 제한한다.
   private async limitOutgoing(sender: RTCRtpSender): Promise<void> {
     const params = sender.getParameters();
     if (!params.encodings || params.encodings.length === 0) {
       params.encodings = [{}];
     }
-    params.encodings[0].maxBitrate = 700_000; // ~700 kbps
+    params.encodings[0].maxBitrate = 300_000; // ~300 kbps (작은 정사각형 소스라 이전보다 낮춤)
     params.encodings[0].maxFramerate = 30;
-    params.encodings[0].scaleResolutionDownBy = 1.5; // 640x480 → ~427x320 (전송분만)
     try {
       await sender.setParameters(params);
     } catch {
