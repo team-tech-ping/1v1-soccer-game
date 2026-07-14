@@ -75,6 +75,17 @@ export class CameraShare {
     if (this.isInitiator && peerAlreadyPresent) await this.makeOffer();
   }
 
+  // 이미 협상된 연결의 송신 트랙을 새 스트림으로 교체한다(재협상 없이 즉시 반영).
+  // 예: 경기 중 얼굴 필터를 끄면 합성 스트림 대신 원본 웹캠 트랙으로 바꿀 때 사용.
+  async replaceStream(newStream: MediaStream): Promise<void> {
+    const track = newStream.getVideoTracks()[0];
+    if (!track) return;
+    const senders = this.pc.getSenders().filter((s) => s.track && s.track.kind === "video");
+    for (const sender of senders) {
+      await sender.replaceTrack(track);
+    }
+  }
+
   // 전송 영상에 적당한 상한을 둔다(대역폭 위생용).
   // 성능 문제는 수신측 렌더 방식(캔버스 텍스처)에서 해결하므로 화질을 크게 깎지 않는다.
   // 타일이 작아 초고화질은 불필요하지만 부드럽게 보일 정도(30fps)는 유지한다.

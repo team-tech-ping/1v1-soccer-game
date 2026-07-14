@@ -9,6 +9,7 @@ import {
   GOAL_COOLDOWN_MS,
   SNAPSHOT_HZ,
   INPUT_HZ,
+  MATCH_DURATION_MS,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -62,6 +63,11 @@ export class PlayScene extends Phaser.Scene {
   private scoreRight = 0;
   private lastGoalAt = 0;
 
+  // 경기 시간
+  private matchStartAt = 0;
+  private matchEnded = false;
+  private clockText!: Phaser.GameObjects.Text;
+
   private session: RoomSession | null = null;
   private roomCode: string | null = null;
   private mode: "host" | "guest" | "local" = "local";
@@ -80,6 +86,7 @@ export class PlayScene extends Phaser.Scene {
   private faceMask: FaceMaskPipeline | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
+  private filterToggleText: Phaser.GameObjects.Text | null = null;
 
   constructor() {
     super("Play");
@@ -99,6 +106,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.matchStartAt = this.time.now;
     const groundTop = GAME_HEIGHT - GROUND_HEIGHT;
 
     // 물리 월드 경계의 바닥을 '바닥 윗면'에 맞춘다.
@@ -180,6 +188,32 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
     this.updateScoreboard();
+
+    this.clockText = this.add
+      .text(GAME_WIDTH / 2, 52, this.formatClock(MATCH_DURATION_MS), {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#8fa3bf",
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0);
+
+    // 경기 중 얼굴 필터를 끌 수 있는 버튼(필터를 켜고 입장했을 때만 표시).
+    if (this.filterEnabled) {
+      this.filterToggleText = this.add
+        .text(GAME_WIDTH - 24, 20, "🎭 필터 끄기", {
+          fontFamily: "sans-serif",
+          fontSize: "14px",
+          color: "#e0e1dd",
+          backgroundColor: "#00000099",
+          padding: { x: 10, y: 6 },
+        })
+        .setOrigin(1, 0)
+        .setScrollFactor(0)
+        .setDepth(2000)
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => this.turnOffFilter());
+    }
 
     this.add
       .text(GAME_WIDTH / 2, GAME_HEIGHT - 26, "C: 정면 보정 · R: 공 리셋", {
@@ -288,6 +322,25 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
+  // 경기 중 얼굴 필터를 끈다: 검출 파이프라인을 멈추고, 상대에게 나가는 스트림을
+  // 원본 웹캠으로 교체한다(재협상 없이 트랙만 바꿔치기). 되돌리기는 지원하지 않는다.
+  private turnOffFilter(): void {
+    if (!this.filterEnabled) return;
+    this.filterEnabled = false;
+    this.filterToggleText?.destroy();
+    this.filterToggleText = null;
+
+    this.faceMask?.stop();
+    this.faceMask = null;
+
+    const raw = this.motion.stream;
+    if (raw) {
+      this.localCam?.loadMediaStream(raw, true);
+      this.localCam?.play();
+      void this.cameraShare?.replaceStream(raw);
+    }
+  }
+
   // 웹캠 스트림을 캐릭터 머리 위에 작게 그린다(Phaser 캔버스 텍스처 — DOM 오버레이 아님).
   // scrollFactor 기본(1) → 월드를 따라 스크롤. 위치는 매 프레임 positionCameras()가 갱신.
   private addCamVideo(
@@ -317,7 +370,7 @@ export class PlayScene extends Phaser.Scene {
     hitBody.setImmovable(true);
     this.physics.add.collider(this.ball.sprite, hit, () => {
       const ob = owner.sprite.body as Phaser.Physics.Arcade.Body;
-      this.ball.kick(hit.x, ob.velocity.x);
+      this.ball.head(hit.x, ob.velocity.x);
     });
     v.setData("hit", hit);
 
@@ -383,7 +436,17 @@ export class PlayScene extends Phaser.Scene {
       this.player2.update(p2Input);
 
       if (this.mode === "host") this.maybeSendSnapshot(now);
+
+      const remaining = this.remainingMs();
+      this.clockText.setText(this.formatClock(remaining));
+      if (remaining <= 0 && !this.matchEnded) {
+        this.endMatch();
+      }
     }
+
+    // 경기가 끝났다면(막 endMatch()가 호출됐거나 guest가 종료 스냅샷을 받았다면)
+    // 씬 전환이 처리될 때까지 나머지 프레임 로직은 건너뛴다.
+    if (this.matchEnded) return;
 
     this.positionCameras();
     this.updateStatus();
@@ -394,14 +457,15 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // 공이 골 영역에 들어오면 해당 스코어를 올리고 공을 중앙으로 리셋.
+  // 축구 규칙: 왼쪽 골에 넣으면 '오른쪽' 팀(상대) 득점, 오른쪽 골에 넣으면 '왼쪽' 팀 득점.
   private onGoal(side: GoalSide): void {
     if (this.mode === "guest") return; // 점수는 host 권위
     const now = this.time.now;
     if (now - this.lastGoalAt < GOAL_COOLDOWN_MS) return;
     this.lastGoalAt = now;
 
-    if (side === "left") this.scoreLeft++;
-    else this.scoreRight++;
+    if (side === "left") this.scoreRight++;
+    else this.scoreLeft++;
 
     this.updateScoreboard();
     this.cameras.main.flash(200, 255, 255, 255);
@@ -414,6 +478,39 @@ export class PlayScene extends Phaser.Scene {
 
   private updateScoreboard(): void {
     this.scoreText.setText(`◀ ${this.scoreLeft}   :   ${this.scoreRight} ▶`);
+  }
+
+  // 남은 경기 시간(ms). host/local이 실시간으로 계산하는 권위 값이다.
+  private remainingMs(): number {
+    return Math.max(0, MATCH_DURATION_MS - (this.time.now - this.matchStartAt));
+  }
+
+  private formatClock(ms: number): string {
+    const total = Math.ceil(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  // 시간 종료 시 호출(host/local 전용). 물리를 멈추고, host면 종료 스냅샷을 한 번 더
+  // 즉시 보내 guest도 지체 없이 결과 화면으로 넘어가게 한 뒤 Result로 전환한다.
+  private endMatch(): void {
+    if (this.matchEnded) return;
+    this.matchEnded = true;
+    this.physics.world.pause();
+    if (this.mode === "host" && this.session) {
+      const w = this.readWorld();
+      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, this.time.now));
+    }
+    this.goToResult();
+  }
+
+  private goToResult(): void {
+    this.scene.start("Result", {
+      scoreLeft: this.scoreLeft,
+      scoreRight: this.scoreRight,
+      mode: this.mode,
+    });
   }
 
   // 모션이 준비되면 모션 입력을, 아니면 키보드 입력을 사용한다.
@@ -462,8 +559,8 @@ export class PlayScene extends Phaser.Scene {
       ball: { x: this.ball.sprite.x, y: this.ball.sprite.y, vx: bb.velocity.x, vy: bb.velocity.y },
       scoreL: this.scoreLeft,
       scoreR: this.scoreRight,
-      clockMs: 0, // 경기 시계는 후속(명세 2.3) — 현재 0
-      phase: "playing",
+      clockMs: this.remainingMs(),
+      phase: this.matchEnded ? "ended" : "playing",
     };
   }
 
@@ -487,6 +584,11 @@ export class PlayScene extends Phaser.Scene {
       this.scoreLeft = s.scoreL;
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
+      this.clockText.setText(this.formatClock(s.clockMs));
+      if (s.phase === "ended" && !this.matchEnded) {
+        this.matchEnded = true;
+        this.goToResult();
+      }
     }
   }
 
