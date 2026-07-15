@@ -134,7 +134,11 @@ export class PlayScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.matchStartAt = this.time.now;
+    // performance.now()를 쓴다(this.time.now가 아니라): Phaser의 scene.time.now는
+    // 씬이 비활성인 동안 갱신되지 않아, 재매칭 시 create()에서 읽으면 '이전 경기
+    // 종료 시각'으로 얼어붙어 있다. 그러면 경기 사이(결과·홈·매칭 대기)에 흐른 시간이
+    // 통째로 경기 시간에서 깎여, 시간이 줄어든 채 시작하거나(심하면) 즉시 종료된다.
+    this.matchStartAt = performance.now();
     const groundTop = GAME_HEIGHT - GROUND_HEIGHT;
 
     // 물리 월드 경계의 바닥을 '바닥 윗면'에 맞춘다.
@@ -504,7 +508,7 @@ export class PlayScene extends Phaser.Scene {
   // 축구 규칙: 왼쪽 골에 넣으면 '오른쪽' 팀(상대) 득점, 오른쪽 골에 넣으면 '왼쪽' 팀 득점.
   private onGoal(side: GoalSide): void {
     if (this.mode === "guest") return; // 점수는 host 권위
-    const now = this.time.now;
+    const now = performance.now();
     if (now - this.lastGoalAt < GOAL_COOLDOWN_MS) return;
     this.lastGoalAt = now;
 
@@ -525,8 +529,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // 남은 경기 시간(ms). host/local이 실시간으로 계산하는 권위 값이다.
+  // matchStartAt과 동일하게 performance.now() 기준(this.time.now는 씬 비활성 중 얼어붙음).
   private remainingMs(): number {
-    return Math.max(0, MATCH_DURATION_MS - (this.time.now - this.matchStartAt));
+    return Math.max(0, MATCH_DURATION_MS - (performance.now() - this.matchStartAt));
   }
 
   private formatClock(ms: number): string {
@@ -544,7 +549,7 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.pause();
     if (this.mode === "host" && this.session) {
       const w = this.readWorld();
-      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, this.time.now));
+      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, performance.now()));
     }
     this.goToResult();
   }
