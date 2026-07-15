@@ -412,14 +412,9 @@ export class PlayScene extends Phaser.Scene {
     });
     v.setData("hit", hit);
 
-    v.on("textureready", () => {
-      const el = v.video;
-      const vw = (el && el.videoWidth) || 4;
-      const vh = (el && el.videoHeight) || 3;
-      // 정사각을 '덮도록' 스케일(작은 변이 D). 넘치는 부분은 원형 마스크가 자름 → 왜곡 없음.
-      const scale = D / Math.min(vw, vh);
-      v.setDisplaySize(vw * scale, vh * scale);
-    });
+    // 표시 크기는 placeCam()에서 매 프레임 라이브 해상도로 재계산한다(fitCamSquare).
+    // MediaStream은 해상도가 늦게 확정되거나 도중에 바뀔 수 있어, textureready 순간
+    // 한 번만 계산하면 로컬/원격이 서로 다른 크기로 굳는다.
     v.loadMediaStream(stream, true);
     v.play();
     return v;
@@ -431,8 +426,19 @@ export class PlayScene extends Phaser.Scene {
     this.placeCam(this.remoteCam);
   }
 
+  // 라이브 소스 해상도로 "짧은 변 = CAM_DIAMETER"가 되게 매 프레임 재계산한다.
+  // 소스 해상도/타이밍과 무관하게 항상 같은 크기(원 지름 D)로 정규화되어,
+  // 로컬 미리보기와 상대가 받는 화면의 확대 배율이 동일해진다.
+  private fitCamSquare(cam: Phaser.GameObjects.Video): void {
+    const el = cam.video;
+    if (!el || el.videoWidth === 0 || el.videoHeight === 0) return;
+    const s = CAM_DIAMETER / Math.min(el.videoWidth, el.videoHeight);
+    cam.setDisplaySize(el.videoWidth * s, el.videoHeight * s);
+  }
+
   private placeCam(cam: Phaser.GameObjects.Video | null): void {
     if (!cam) return;
+    this.fitCamSquare(cam);
     const owner = cam.getData("owner") as Player;
     const dy = PLAYER_HEIGHT / 2 + CAM_DIAMETER / 2 + 6; // 머리 위로 살짝
     const x = owner.sprite.x;
