@@ -68,6 +68,8 @@ export class PlayScene extends Phaser.Scene {
   private matchStartAt = 0;
   private matchEnded = false;
   private clockText!: Phaser.GameObjects.Text;
+  // 상대 이탈 판정용: 마지막으로 알려진 남은 시간(guest는 스냅샷 clockMs, host/local은 remainingMs).
+  private lastKnownRemainingMs = MATCH_DURATION_MS;
 
   private session: RoomSession | null = null;
   private roomCode: string | null = null;
@@ -115,6 +117,7 @@ export class PlayScene extends Phaser.Scene {
     this.lastGoalAt = 0;
     this.matchEnded = false;
     this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
+    this.lastKnownRemainingMs = MATCH_DURATION_MS;
 
     this.guestView = new GuestView();
     this.remoteInput = createEmptyInputState();
@@ -240,10 +243,29 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
 
+    // 우상단 버튼들(스택). 온라인이면 '나가기', 필터 켰으면 '필터 끄기'.
+    let rightY = 20;
+    if (this.session) {
+      this.add
+        .text(GAME_WIDTH - 24, rightY, "🚪 나가기", {
+          fontFamily: "sans-serif",
+          fontSize: "14px",
+          color: "#e0e1dd",
+          backgroundColor: "#00000099",
+          padding: { x: 10, y: 6 },
+        })
+        .setOrigin(1, 0)
+        .setScrollFactor(0)
+        .setDepth(2000)
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => this.leaveMatch());
+      rightY += 34;
+    }
+
     // 경기 중 얼굴 필터를 끌 수 있는 버튼(필터를 켜고 입장했을 때만 표시).
     if (this.filterEnabled) {
       this.filterToggleText = this.add
-        .text(GAME_WIDTH - 24, 20, "🎭 필터 끄기", {
+        .text(GAME_WIDTH - 24, rightY, "🎭 필터 끄기", {
           fontFamily: "sans-serif",
           fontSize: "14px",
           color: "#e0e1dd",
@@ -282,6 +304,11 @@ export class PlayScene extends Phaser.Scene {
 
     if (this.session) {
       const ch = this.session.channel;
+      // 상대 이탈 감지: presence 인원이 2 미만으로 떨어지면 상대가 나간 것 → 남은 내가 승리.
+      // (matchStart는 이미 인원 2에서 발화했으므로, 이 시점 이후의 하락은 이탈을 뜻한다.)
+      ch.onPresenceChange((count) => {
+        if (count < 2) this.opponentLeft();
+      });
       if (this.mode === "host") {
         // guest 입력 수신 → player2 입력으로 사용
         ch.on(EV_INPUT, (p) => {
@@ -486,6 +513,7 @@ export class PlayScene extends Phaser.Scene {
       if (this.mode === "host") this.maybeSendSnapshot(now);
 
       const remaining = this.remainingMs();
+      this.lastKnownRemainingMs = remaining;
       this.clockText.setText(this.formatClock(remaining));
       if (remaining <= 0 && !this.matchEnded) {
         this.endMatch();
@@ -562,6 +590,33 @@ export class PlayScene extends Phaser.Scene {
     });
   }
 
+  // 상대가 이탈(탭 닫기·나가기·연결 끊김)해 presence가 떨어졌을 때: 남은 내가 승리.
+  private opponentLeft(): void {
+    if (this.matchEnded) return;
+    // 시작 직후 설정 중의 일시적 presence 흔들림은 무시(오탐 방지).
+    if (performance.now() - this.matchStartAt < 1500) return;
+    // 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가 채널을 떠나며
+    // presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮어쓰는 것을 막는다.
+    const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
+    if (remaining <= 3000) return;
+
+    this.matchEnded = true;
+    this.physics.world.pause();
+    this.scene.start("Result", {
+      scoreLeft: this.scoreLeft,
+      scoreRight: this.scoreRight,
+      mode: this.mode,
+      forfeit: true,
+    });
+  }
+
+  // 스스로 경기를 나간다: 홈으로 이동. SHUTDOWN에서 channel.leave()가 호출되어
+  // 상대의 presence가 떨어지고, 상대는 opponentLeft()로 승리 처리된다.
+  private leaveMatch(): void {
+    this.matchEnded = true; // 남은 프레임에서 종료 로직 재진입 방지
+    this.scene.start("Home");
+  }
+
   // 모션이 준비되면 모션 입력을, 아니면 키보드 입력을 사용한다.
   private resolveInput(now: number): InputState {
     if (this.motion.ready) {
@@ -633,6 +688,7 @@ export class PlayScene extends Phaser.Scene {
       this.scoreLeft = s.scoreL;
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
+      this.lastKnownRemainingMs = s.clockMs;
       this.clockText.setText(this.formatClock(s.clockMs));
       if (s.phase === "ended" && !this.matchEnded) {
         this.matchEnded = true;
