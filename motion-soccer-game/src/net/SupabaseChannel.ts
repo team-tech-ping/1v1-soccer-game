@@ -7,7 +7,6 @@ import { getSupabase } from "./supabaseClient";
 export class SupabaseChannel implements NetChannel {
   private channel: RealtimeChannel;
   private presenceCb: ((count: number) => void) | null = null;
-  private presenceBound = false;
   private clientId = Math.random().toString(36).slice(2);
 
   constructor(roomCode: string) {
@@ -17,6 +16,15 @@ export class SupabaseChannel implements NetChannel {
         broadcast: { self: false },
         presence: { key: this.clientId },
       },
+    });
+    // presence 콜백은 반드시 subscribe() '이전에' 등록해야 한다 — 그 이후에 등록하면
+    // Supabase가 "cannot add presence callbacks after subscribe()" 예외를 던진다.
+    // (guest는 RoomSession이 onPresenceChange를 부르지 않아, 예전엔 PlayScene에서 처음
+    //  호출되며 subscribe 뒤에 등록되어 예외로 create()가 중단·화면이 멈췄다.)
+    // 그래서 리스너는 여기서 한 번만 바인딩하고, onPresenceChange는 콜백만 교체한다.
+    this.channel.on("presence", { event: "sync" }, () => {
+      const state = this.channel.presenceState();
+      this.presenceCb?.(Object.keys(state).length);
     });
   }
 
@@ -30,15 +38,9 @@ export class SupabaseChannel implements NetChannel {
   }
 
   onPresenceChange(cb: (count: number) => void): void {
+    // 리스너는 생성자에서 이미 바인딩됨(subscribe 전). 여기선 콜백만 교체한다.
     // 최신 콜백이 이긴다(FakeChannel의 덮어쓰기 semantics와 일치).
     this.presenceCb = cb;
-    // presence 바인딩은 한 번만 붙인다(중복 등록 시 sync당 콜백이 여러 번 발화되는 것 방지).
-    if (this.presenceBound) return;
-    this.presenceBound = true;
-    this.channel.on("presence", { event: "sync" }, () => {
-      const state = this.channel.presenceState();
-      this.presenceCb?.(Object.keys(state).length);
-    });
   }
 
   async join(): Promise<void> {
