@@ -92,6 +92,7 @@ export class PlayScene extends Phaser.Scene {
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
+  private filterBusy = false; // 필터 토글 중복 실행 방지(init 시 비동기)
 
   constructor() {
     super("Play");
@@ -137,6 +138,7 @@ export class PlayScene extends Phaser.Scene {
     this.overlaysActive = true;
     this.faceMask = null;
     this.filterToggleText = null;
+    this.filterBusy = false;
   }
 
   create(): void {
@@ -246,7 +248,7 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
 
-    // 우상단 버튼들(스택). 온라인이면 '나가기', 필터 켰으면 '필터 끄기'.
+    // 우상단 버튼들(스택, 온라인 전용): '나가기' + 얼굴 필터 켜기/끄기 토글.
     let rightY = 20;
     if (this.session) {
       this.add
@@ -263,12 +265,10 @@ export class PlayScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true })
         .on("pointerdown", () => this.leaveMatch());
       rightY += 34;
-    }
 
-    // 경기 중 얼굴 필터를 끌 수 있는 버튼(필터를 켜고 입장했을 때만 표시).
-    if (this.filterEnabled) {
+      // 경기 중 얼굴 필터를 켜고 끌 수 있는 토글(항상 표시).
       this.filterToggleText = this.add
-        .text(GAME_WIDTH - 24, rightY, "🎭 필터 끄기", {
+        .text(GAME_WIDTH - 24, rightY, this.filterLabel(), {
           fontFamily: "sans-serif",
           fontSize: "14px",
           color: "#e0e1dd",
@@ -279,7 +279,7 @@ export class PlayScene extends Phaser.Scene {
         .setScrollFactor(0)
         .setDepth(2000)
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.turnOffFilter());
+        .on("pointerdown", () => void this.toggleFilter());
     }
 
     this.add
@@ -414,23 +414,45 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
-  // 경기 중 얼굴 필터를 끈다: 검출 파이프라인을 멈추고, 상대에게 나가는 스트림을
-  // 원본 웹캠으로 교체한다(재협상 없이 트랙만 바꿔치기). 되돌리기는 지원하지 않는다.
-  private turnOffFilter(): void {
-    if (!this.filterEnabled) return;
-    this.filterEnabled = false;
-    this.filterToggleText?.destroy();
-    this.filterToggleText = null;
+  private filterLabel(): string {
+    return this.filterEnabled ? "🎭 필터 끄기" : "🎭 필터 켜기";
+  }
 
-    this.faceMask?.stop();
-    this.faceMask = null;
-
+  // 경기 중 얼굴 필터를 켜고 끈다(반복 가능). 로컬 미리보기와 상대 전송 스트림 둘 다
+  // 재협상 없이 트랙 교체(replaceStream)로 바꾼다. 카메라 공유가 준비되기 전에는 무시.
+  private async toggleFilter(): Promise<void> {
+    if (this.filterBusy) return;
     const raw = this.motion.stream;
-    if (raw) {
-      this.localCam?.loadMediaStream(raw, true);
-      this.localCam?.play();
-      void this.cameraShare?.replaceStream(raw);
+    if (!this.cameraShare || !raw) return; // 카메라 공유 준비 전
+    this.filterBusy = true;
+    try {
+      if (this.filterEnabled) {
+        // 끄기: 파이프라인 정지 + 원본 웹캠으로.
+        this.faceMask?.stop();
+        this.faceMask = null;
+        this.filterEnabled = false;
+        this.applyShareStream(raw);
+      } else {
+        // 켜기: 파이프라인 생성/초기화 + 합성(마스킹) 스트림으로.
+        const pipeline = new FaceMaskPipeline(this.motion.video, this.animalId);
+        await pipeline.init();
+        this.faceMask = pipeline;
+        this.filterEnabled = true;
+        this.applyShareStream(pipeline.outputStream);
+      }
+      this.filterToggleText?.setText(this.filterLabel());
+    } catch (e) {
+      console.warn("[face-mask] 토글 실패", e);
+    } finally {
+      this.filterBusy = false;
     }
+  }
+
+  // 로컬 미리보기와 상대 전송 스트림을 같은 스트림으로 교체.
+  private applyShareStream(stream: MediaStream): void {
+    this.localCam?.loadMediaStream(stream, true);
+    this.localCam?.play();
+    void this.cameraShare?.replaceStream(stream);
   }
 
   // 웹캠 스트림을 캐릭터 머리 위에 작게 그린다(Phaser 캔버스 텍스처 — DOM 오버레이 아님).
