@@ -11,6 +11,7 @@ import {
   SNAPSHOT_HZ,
   INPUT_HZ,
   MATCH_DURATION_MS,
+  BALL_RADIUS,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -93,6 +94,7 @@ export class PlayScene extends Phaser.Scene {
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
   private filterBusy = false; // 필터 토글 중복 실행 방지(init 시 비동기)
+  private prevBallX = NaN; // 진단용: 공-플레이어 관통(터널링) 감지
 
   constructor() {
     super("Play");
@@ -139,6 +141,7 @@ export class PlayScene extends Phaser.Scene {
     this.faceMask = null;
     this.filterToggleText = null;
     this.filterBusy = false;
+    this.prevBallX = NaN;
   }
 
   create(): void {
@@ -533,6 +536,31 @@ export class PlayScene extends Phaser.Scene {
     this.remoteCam?.setVisible(this.overlaysActive);
   }
 
+  // 진단: 이번 프레임에 공이 플레이어의 한쪽에서 반대쪽으로 '넘어갔는데' 세로로 겹쳐
+  // 있었다면(=몸을 관통) 그 순간의 속도/위치를 로그로 남긴다.
+  private detectTunnel(): void {
+    const bx = this.ball.sprite.x;
+    const by = this.ball.sprite.y;
+    if (!Number.isNaN(this.prevBallX)) {
+      for (const [i, p] of [this.player1, this.player2].entries()) {
+        const px = p.sprite.x;
+        const py = p.sprite.y;
+        const vClose = Math.abs(by - py) < PLAYER_HEIGHT / 2 + BALL_RADIUS;
+        const prevSide = Math.sign(this.prevBallX - px);
+        const curSide = Math.sign(bx - px);
+        if (vClose && prevSide !== 0 && curSide !== 0 && prevSide !== curSide) {
+          const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[tunnel] P${i + 1} 관통! ballV=(${bb.velocity.x.toFixed(0)},${bb.velocity.y.toFixed(0)}) ` +
+              `dy=${(by - py).toFixed(0)} prevDx=${(this.prevBallX - px).toFixed(0)} curDx=${(bx - px).toFixed(0)}`
+          );
+        }
+      }
+    }
+    this.prevBallX = bx;
+  }
+
   update(_time: number, delta: number): void {
     const now = performance.now();
 
@@ -546,6 +574,9 @@ export class PlayScene extends Phaser.Scene {
 
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
+
+    // 진단: 실제 물리가 도는 host/local에서 공이 플레이어를 관통했는지 감지.
+    if (this.mode !== "guest") this.detectTunnel();
 
     if (this.mode === "guest") {
       this.updateGuest(now);
