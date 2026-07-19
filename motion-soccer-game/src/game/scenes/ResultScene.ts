@@ -24,6 +24,7 @@ const CSS = `
 .msg-result-title.win { color: #7ee787; }
 .msg-result-title.lose { color: #ff8f8f; }
 .msg-result-title.draw { color: #ffd166; }
+.msg-result-note { font-size: 13px; color: #8fa3bf; margin: 8px 0 0; }
 .msg-result-score { font-size: 40px; font-weight: 800; letter-spacing: 4px; margin: 18px 0 26px; color: #e0e1dd; }
 .msg-result-btn {
   display: block; width: 100%; padding: 12px; box-sizing: border-box;
@@ -39,6 +40,7 @@ interface ResultData {
   scoreLeft: number;
   scoreRight: number;
   mode: "host" | "guest" | "local";
+  forfeit?: boolean; // 상대 이탈로 인한 승리(이 화면의 플레이어가 승자)
 }
 
 export class ResultScene extends Phaser.Scene {
@@ -57,8 +59,8 @@ export class ResultScene extends Phaser.Scene {
     this.injectStyles();
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
 
-    const { scoreLeft, scoreRight, mode } = this.result;
-    const { title, cls } = this.describe(scoreLeft, scoreRight, mode);
+    const { scoreLeft, scoreRight, mode, forfeit } = this.result;
+    const { title, cls } = this.describe(scoreLeft, scoreRight, mode, forfeit);
 
     const overlay = document.createElement("div");
     overlay.className = "msg-result-overlay";
@@ -69,6 +71,13 @@ export class ResultScene extends Phaser.Scene {
     titleEl.className = `msg-result-title ${cls}`;
     titleEl.textContent = title;
     card.appendChild(titleEl);
+
+    if (forfeit) {
+      const note = document.createElement("p");
+      note.className = "msg-result-note";
+      note.textContent = "상대가 게임을 나갔습니다";
+      card.appendChild(note);
+    }
 
     const scoreEl = document.createElement("div");
     scoreEl.className = "msg-result-score";
@@ -91,8 +100,12 @@ export class ResultScene extends Phaser.Scene {
   private describe(
     scoreLeft: number,
     scoreRight: number,
-    mode: ResultData["mode"]
+    mode: ResultData["mode"],
+    forfeit?: boolean
   ): { title: string; cls: string } {
+    // 상대 이탈: 이 화면을 보는 사람이 남은 플레이어 → 무조건 승리.
+    if (forfeit) return { title: "승리! 🎉", cls: "win" };
+
     if (scoreLeft === scoreRight) return { title: "무승부!", cls: "draw" };
 
     const leftWins = scoreLeft > scoreRight;

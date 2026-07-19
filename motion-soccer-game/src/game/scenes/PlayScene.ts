@@ -11,6 +11,7 @@ import {
   SNAPSHOT_HZ,
   INPUT_HZ,
   MATCH_DURATION_MS,
+  BALL_RADIUS,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -68,6 +69,10 @@ export class PlayScene extends Phaser.Scene {
   private matchStartAt = 0;
   private matchEnded = false;
   private clockText!: Phaser.GameObjects.Text;
+  // 상대 이탈 판정용: 마지막으로 알려진 남은 시간(guest는 스냅샷 clockMs, host/local은 remainingMs).
+  private lastKnownRemainingMs = MATCH_DURATION_MS;
+  // presence가 잠깐 떨어졌을 때 진짜 이탈인지 유예 확인하는 타이머.
+  private leaveDebounce: number | null = null;
 
   private session: RoomSession | null = null;
   private roomCode: string | null = null;
@@ -88,6 +93,8 @@ export class PlayScene extends Phaser.Scene {
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
+  private filterBusy = false; // 필터 토글 중복 실행 방지(init 시 비동기)
+  private prevBallX = NaN; // 진단용: 공-플레이어 관통(터널링) 감지
 
   constructor() {
     super("Play");
@@ -115,6 +122,8 @@ export class PlayScene extends Phaser.Scene {
     this.lastGoalAt = 0;
     this.matchEnded = false;
     this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
+    this.lastKnownRemainingMs = MATCH_DURATION_MS;
+    this.leaveDebounce = null;
 
     this.guestView = new GuestView();
     this.remoteInput = createEmptyInputState();
@@ -131,10 +140,16 @@ export class PlayScene extends Phaser.Scene {
     this.overlaysActive = true;
     this.faceMask = null;
     this.filterToggleText = null;
+    this.filterBusy = false;
+    this.prevBallX = NaN;
   }
 
   create(): void {
-    this.matchStartAt = this.time.now;
+    // performance.now()를 쓴다(this.time.now가 아니라): Phaser의 scene.time.now는
+    // 씬이 비활성인 동안 갱신되지 않아, 재매칭 시 create()에서 읽으면 '이전 경기
+    // 종료 시각'으로 얼어붙어 있다. 그러면 경기 사이(결과·홈·매칭 대기)에 흐른 시간이
+    // 통째로 경기 시간에서 깎여, 시간이 줄어든 채 시작하거나(심하면) 즉시 종료된다.
+    this.matchStartAt = performance.now();
     const groundTop = GAME_HEIGHT - GROUND_HEIGHT;
 
     // 물리 월드 경계의 바닥을 '바닥 윗면'에 맞춘다.
@@ -236,10 +251,11 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
 
-    // 경기 중 얼굴 필터를 끌 수 있는 버튼(필터를 켜고 입장했을 때만 표시).
-    if (this.filterEnabled) {
-      this.filterToggleText = this.add
-        .text(GAME_WIDTH - 24, 20, "🎭 필터 끄기", {
+    // 우상단 버튼들(스택, 온라인 전용): '나가기' + 얼굴 필터 켜기/끄기 토글.
+    let rightY = 20;
+    if (this.session) {
+      this.add
+        .text(GAME_WIDTH - 24, rightY, "🚪 나가기", {
           fontFamily: "sans-serif",
           fontSize: "14px",
           color: "#e0e1dd",
@@ -250,7 +266,23 @@ export class PlayScene extends Phaser.Scene {
         .setScrollFactor(0)
         .setDepth(2000)
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.turnOffFilter());
+        .on("pointerdown", () => this.leaveMatch());
+      rightY += 34;
+
+      // 경기 중 얼굴 필터를 켜고 끌 수 있는 토글(항상 표시).
+      this.filterToggleText = this.add
+        .text(GAME_WIDTH - 24, rightY, this.filterLabel(), {
+          fontFamily: "sans-serif",
+          fontSize: "14px",
+          color: "#e0e1dd",
+          backgroundColor: "#00000099",
+          padding: { x: 10, y: 6 },
+        })
+        .setOrigin(1, 0)
+        .setScrollFactor(0)
+        .setDepth(2000)
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => void this.toggleFilter());
     }
 
     this.add
@@ -263,6 +295,10 @@ export class PlayScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.leaveDebounce !== null) {
+        window.clearTimeout(this.leaveDebounce);
+        this.leaveDebounce = null;
+      }
       this.motion.stop();
       this.faceMask?.stop();
       this.cameraShare?.stop();
@@ -278,6 +314,27 @@ export class PlayScene extends Phaser.Scene {
 
     if (this.session) {
       const ch = this.session.channel;
+      // 상대 이탈 감지: presence 인원이 2 미만으로 떨어지면 상대가 나간 것 → 남은 내가 승리.
+      // 단, 느린 접속/재구독 순간 presence가 '잠깐' 1로 흔들릴 수 있어(그걸 이탈로 오판하면
+      // 물리를 멈추고 결과로 넘어가 상대 화면이 얼어붙는다), 2.5초 유예 후에도 여전히
+      // 1일 때만 진짜 이탈로 확정한다(그 사이 2로 복귀하면 취소).
+      ch.onPresenceChange((count) => {
+        // eslint-disable-next-line no-console
+        console.log(`[presence] mode=${this.mode} count=${count}`);
+        if (count >= 2) {
+          if (this.leaveDebounce !== null) {
+            window.clearTimeout(this.leaveDebounce);
+            this.leaveDebounce = null;
+          }
+          return;
+        }
+        if (this.leaveDebounce === null && !this.matchEnded) {
+          this.leaveDebounce = window.setTimeout(() => {
+            this.leaveDebounce = null;
+            this.opponentLeft();
+          }, 2500);
+        }
+      });
       if (this.mode === "host") {
         // guest 입력 수신 → player2 입력으로 사용
         ch.on(EV_INPUT, (p) => {
@@ -360,23 +417,45 @@ export class PlayScene extends Phaser.Scene {
       .catch((e) => console.warn("[camera-share]", e));
   }
 
-  // 경기 중 얼굴 필터를 끈다: 검출 파이프라인을 멈추고, 상대에게 나가는 스트림을
-  // 원본 웹캠으로 교체한다(재협상 없이 트랙만 바꿔치기). 되돌리기는 지원하지 않는다.
-  private turnOffFilter(): void {
-    if (!this.filterEnabled) return;
-    this.filterEnabled = false;
-    this.filterToggleText?.destroy();
-    this.filterToggleText = null;
+  private filterLabel(): string {
+    return this.filterEnabled ? "🎭 필터 끄기" : "🎭 필터 켜기";
+  }
 
-    this.faceMask?.stop();
-    this.faceMask = null;
-
+  // 경기 중 얼굴 필터를 켜고 끈다(반복 가능). 로컬 미리보기와 상대 전송 스트림 둘 다
+  // 재협상 없이 트랙 교체(replaceStream)로 바꾼다. 카메라 공유가 준비되기 전에는 무시.
+  private async toggleFilter(): Promise<void> {
+    if (this.filterBusy) return;
     const raw = this.motion.stream;
-    if (raw) {
-      this.localCam?.loadMediaStream(raw, true);
-      this.localCam?.play();
-      void this.cameraShare?.replaceStream(raw);
+    if (!this.cameraShare || !raw) return; // 카메라 공유 준비 전
+    this.filterBusy = true;
+    try {
+      if (this.filterEnabled) {
+        // 끄기: 파이프라인 정지 + 원본 웹캠으로.
+        this.faceMask?.stop();
+        this.faceMask = null;
+        this.filterEnabled = false;
+        this.applyShareStream(raw);
+      } else {
+        // 켜기: 파이프라인 생성/초기화 + 합성(마스킹) 스트림으로.
+        const pipeline = new FaceMaskPipeline(this.motion.video, this.animalId);
+        await pipeline.init();
+        this.faceMask = pipeline;
+        this.filterEnabled = true;
+        this.applyShareStream(pipeline.outputStream);
+      }
+      this.filterToggleText?.setText(this.filterLabel());
+    } catch (e) {
+      console.warn("[face-mask] 토글 실패", e);
+    } finally {
+      this.filterBusy = false;
     }
+  }
+
+  // 로컬 미리보기와 상대 전송 스트림을 같은 스트림으로 교체.
+  private applyShareStream(stream: MediaStream): void {
+    this.localCam?.loadMediaStream(stream, true);
+    this.localCam?.play();
+    void this.cameraShare?.replaceStream(stream);
   }
 
   // 웹캠 스트림을 캐릭터 머리 위에 작게 그린다(Phaser 캔버스 텍스처 — DOM 오버레이 아님).
@@ -457,6 +536,31 @@ export class PlayScene extends Phaser.Scene {
     this.remoteCam?.setVisible(this.overlaysActive);
   }
 
+  // 진단: 이번 프레임에 공이 플레이어의 한쪽에서 반대쪽으로 '넘어갔는데' 세로로 겹쳐
+  // 있었다면(=몸을 관통) 그 순간의 속도/위치를 로그로 남긴다.
+  private detectTunnel(): void {
+    const bx = this.ball.sprite.x;
+    const by = this.ball.sprite.y;
+    if (!Number.isNaN(this.prevBallX)) {
+      for (const [i, p] of [this.player1, this.player2].entries()) {
+        const px = p.sprite.x;
+        const py = p.sprite.y;
+        const vClose = Math.abs(by - py) < PLAYER_HEIGHT / 2 + BALL_RADIUS;
+        const prevSide = Math.sign(this.prevBallX - px);
+        const curSide = Math.sign(bx - px);
+        if (vClose && prevSide !== 0 && curSide !== 0 && prevSide !== curSide) {
+          const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[tunnel] P${i + 1} 관통! ballV=(${bb.velocity.x.toFixed(0)},${bb.velocity.y.toFixed(0)}) ` +
+              `dy=${(by - py).toFixed(0)} prevDx=${(this.prevBallX - px).toFixed(0)} curDx=${(bx - px).toFixed(0)}`
+          );
+        }
+      }
+    }
+    this.prevBallX = bx;
+  }
+
   update(_time: number, delta: number): void {
     const now = performance.now();
 
@@ -471,6 +575,9 @@ export class PlayScene extends Phaser.Scene {
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
 
+    // 진단: 실제 물리가 도는 host/local에서 공이 플레이어를 관통했는지 감지.
+    if (this.mode !== "guest") this.detectTunnel();
+
     if (this.mode === "guest") {
       this.updateGuest(now);
     } else {
@@ -482,6 +589,7 @@ export class PlayScene extends Phaser.Scene {
       if (this.mode === "host") this.maybeSendSnapshot(now);
 
       const remaining = this.remainingMs();
+      this.lastKnownRemainingMs = remaining;
       this.clockText.setText(this.formatClock(remaining));
       if (remaining <= 0 && !this.matchEnded) {
         this.endMatch();
@@ -504,7 +612,7 @@ export class PlayScene extends Phaser.Scene {
   // 축구 규칙: 왼쪽 골에 넣으면 '오른쪽' 팀(상대) 득점, 오른쪽 골에 넣으면 '왼쪽' 팀 득점.
   private onGoal(side: GoalSide): void {
     if (this.mode === "guest") return; // 점수는 host 권위
-    const now = this.time.now;
+    const now = performance.now();
     if (now - this.lastGoalAt < GOAL_COOLDOWN_MS) return;
     this.lastGoalAt = now;
 
@@ -525,8 +633,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // 남은 경기 시간(ms). host/local이 실시간으로 계산하는 권위 값이다.
+  // matchStartAt과 동일하게 performance.now() 기준(this.time.now는 씬 비활성 중 얼어붙음).
   private remainingMs(): number {
-    return Math.max(0, MATCH_DURATION_MS - (this.time.now - this.matchStartAt));
+    return Math.max(0, MATCH_DURATION_MS - (performance.now() - this.matchStartAt));
   }
 
   private formatClock(ms: number): string {
@@ -544,7 +653,7 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.pause();
     if (this.mode === "host" && this.session) {
       const w = this.readWorld();
-      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, this.time.now));
+      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, performance.now()));
     }
     this.goToResult();
   }
@@ -555,6 +664,33 @@ export class PlayScene extends Phaser.Scene {
       scoreRight: this.scoreRight,
       mode: this.mode,
     });
+  }
+
+  // 상대가 이탈(탭 닫기·나가기·연결 끊김)해 presence가 떨어졌을 때: 남은 내가 승리.
+  private opponentLeft(): void {
+    if (this.matchEnded) return;
+    // 시작 직후 설정 중의 일시적 presence 흔들림은 무시(오탐 방지).
+    if (performance.now() - this.matchStartAt < 1500) return;
+    // 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가 채널을 떠나며
+    // presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮어쓰는 것을 막는다.
+    const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
+    if (remaining <= 3000) return;
+
+    this.matchEnded = true;
+    this.physics.world.pause();
+    this.scene.start("Result", {
+      scoreLeft: this.scoreLeft,
+      scoreRight: this.scoreRight,
+      mode: this.mode,
+      forfeit: true,
+    });
+  }
+
+  // 스스로 경기를 나간다: 홈으로 이동. SHUTDOWN에서 channel.leave()가 호출되어
+  // 상대의 presence가 떨어지고, 상대는 opponentLeft()로 승리 처리된다.
+  private leaveMatch(): void {
+    this.matchEnded = true; // 남은 프레임에서 종료 로직 재진입 방지
+    this.scene.start("Home");
   }
 
   // 모션이 준비되면 모션 입력을, 아니면 키보드 입력을 사용한다.
@@ -628,6 +764,7 @@ export class PlayScene extends Phaser.Scene {
       this.scoreLeft = s.scoreL;
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
+      this.lastKnownRemainingMs = s.clockMs;
       this.clockText.setText(this.formatClock(s.clockMs));
       if (s.phase === "ended" && !this.matchEnded) {
         this.matchEnded = true;
