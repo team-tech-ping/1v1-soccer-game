@@ -70,6 +70,8 @@ export class PlayScene extends Phaser.Scene {
   private clockText!: Phaser.GameObjects.Text;
   // 상대 이탈 판정용: 마지막으로 알려진 남은 시간(guest는 스냅샷 clockMs, host/local은 remainingMs).
   private lastKnownRemainingMs = MATCH_DURATION_MS;
+  // presence가 잠깐 떨어졌을 때 진짜 이탈인지 유예 확인하는 타이머.
+  private leaveDebounce: number | null = null;
 
   private session: RoomSession | null = null;
   private roomCode: string | null = null;
@@ -118,6 +120,7 @@ export class PlayScene extends Phaser.Scene {
     this.matchEnded = false;
     this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
     this.lastKnownRemainingMs = MATCH_DURATION_MS;
+    this.leaveDebounce = null;
 
     this.guestView = new GuestView();
     this.remoteInput = createEmptyInputState();
@@ -289,6 +292,10 @@ export class PlayScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.leaveDebounce !== null) {
+        window.clearTimeout(this.leaveDebounce);
+        this.leaveDebounce = null;
+      }
       this.motion.stop();
       this.faceMask?.stop();
       this.cameraShare?.stop();
@@ -305,9 +312,25 @@ export class PlayScene extends Phaser.Scene {
     if (this.session) {
       const ch = this.session.channel;
       // 상대 이탈 감지: presence 인원이 2 미만으로 떨어지면 상대가 나간 것 → 남은 내가 승리.
-      // (matchStart는 이미 인원 2에서 발화했으므로, 이 시점 이후의 하락은 이탈을 뜻한다.)
+      // 단, 느린 접속/재구독 순간 presence가 '잠깐' 1로 흔들릴 수 있어(그걸 이탈로 오판하면
+      // 물리를 멈추고 결과로 넘어가 상대 화면이 얼어붙는다), 2.5초 유예 후에도 여전히
+      // 1일 때만 진짜 이탈로 확정한다(그 사이 2로 복귀하면 취소).
       ch.onPresenceChange((count) => {
-        if (count < 2) this.opponentLeft();
+        // eslint-disable-next-line no-console
+        console.log(`[presence] mode=${this.mode} count=${count}`);
+        if (count >= 2) {
+          if (this.leaveDebounce !== null) {
+            window.clearTimeout(this.leaveDebounce);
+            this.leaveDebounce = null;
+          }
+          return;
+        }
+        if (this.leaveDebounce === null && !this.matchEnded) {
+          this.leaveDebounce = window.setTimeout(() => {
+            this.leaveDebounce = null;
+            this.opponentLeft();
+          }, 2500);
+        }
       });
       if (this.mode === "host") {
         // guest 입력 수신 → player2 입력으로 사용
