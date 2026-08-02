@@ -32,8 +32,11 @@ export const BALL_COLOR = 0xf1faee;
 export const BALL_BOUNCE = 0.68; // 반발 계수 (통제 지향 + 약간의 활발함)
 export const BALL_DRAG_X = 160; // 굴러갈 때 수평 감속(마찰 근사) — 낮으면 미끄러워 통제 불가
 export const BALL_MASS = 0.5; // 플레이어보다 가벼워 잘 밀리도록
-export const BALL_KICK_LIFT = 320; // 충돌 시 위로 떠오르는 속도(px/s) — 포물선
+export const BALL_KICK_LIFT = 520; // 충돌 시 위로 떠오르는 속도(px/s) — 기본적으로 캐릭터 키를 넘기는 아치
 export const BALL_MIN_KICK_SPEED = 220; // 충돌 시 최소 수평 발사 속도(px/s)
+// 공이 바닥에서 구를 때 수평 속도 상한. 캐릭터(PLAYER_SPEED=440)보다 살짝 낮게 두어
+// 굴러가는 공을 쫓아가 따라잡을 수 있게 한다(공중 킥 속도에는 영향 없음).
+export const BALL_GROUND_MAX_SPEED = 400;
 export const BALL_KICK_COOLDOWN_MS = 180; // 접촉 중 재발동 방지 쿨다운
 // 헤딩(머리 타격)은 몸통 킥보다 약하게: 킥 계산 결과에 이 배수를 곱한다.
 export const HEAD_POWER_SCALE = 0.5;

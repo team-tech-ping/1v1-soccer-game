@@ -11,7 +11,7 @@ import {
   BALL_MAX_VELOCITY_Y,
   BALL_STOMP_SPEED,
   BALL_STOMP_LIFT,
-  BALL_SQUEEZE_ESCAPE_LIFT,
+  BALL_GROUND_MAX_SPEED,
   HEAD_POWER_SCALE,
   PLAYER_WIDTH,
 } from "../../config";
@@ -78,12 +78,10 @@ export class Ball {
     this.sprite.setVelocityY(-BALL_KICK_LIFT * HEAD_POWER_SCALE);
   }
 
-  // 플레이어가 공 위에 수직으로 올라탔을 때(스톰프): 공이 발판처럼 버티지 못하도록
-  // 즉시 플레이어 발밑 밖으로 위치를 옮기고 튕겨낸다. 속도만 주면 다음 물리 스텝에서
-  // Arcade의 자동 겹침 보정이 공을 다시 발밑으로 되돌려 '올라탄' 상태가 재고정될 수
-  // 있어(레이스 컨디션), 위치 자체를 함께 밀어내 겹침을 원천적으로 없앤다.
+  // 플레이어가 공 위에 올라타려 할 때(위에서 히트): 공이 발판이 되지 못하도록 즉시
+  // 발밑 밖으로 위치를 옮기고 옆으로 튕겨낸다. '절대 올라타지 못하게' 매 프레임 호출될
+  // 수 있으므로 쿨다운으로 막지 않는다(막으면 그 사이 공 위에 얹힐 수 있음).
   stomp(playerX: number): void {
-    if (!this.canStrike()) return;
     const dir = this.sprite.x >= playerX ? 1 : -1;
     const escapeGap = PLAYER_WIDTH / 2 + BALL_RADIUS + 8;
     this.sprite.setPosition(playerX + dir * escapeGap, this.sprite.y);
@@ -91,11 +89,13 @@ export class Ball {
     this.sprite.setVelocityY(-BALL_STOMP_LIFT);
   }
 
-  // 두 몸 사이에 낀 공을 위로 탈출시킨다(끼임 상태가 풀릴 때까지 매 프레임 호출).
-  // 좌우 분리 경합으로 공이 한쪽으로 순간이동해 몸을 뚫는 것을 막는다.
-  // toward: 탈출 시 살짝 밀 수평 방향(-1 왼쪽, 1 오른쪽, 0 없음).
-  escapeUp(toward: number): void {
-    this.sprite.setVelocity(toward * 80, -BALL_SQUEEZE_ESCAPE_LIFT);
+  // 바닥에서 구를 때 수평 속도를 상한으로 눌러 캐릭터가 따라잡을 수 있게 한다.
+  // (공중 킥 속도에는 영향 없음 — 바닥에 닿아 있을 때만.)
+  capGroundSpeed(): void {
+    const body = this.sprite.body as Phaser.Physics.Arcade.Body;
+    if (body.blocked.down && Math.abs(body.velocity.x) > BALL_GROUND_MAX_SPEED) {
+      this.sprite.setVelocityX(Math.sign(body.velocity.x) * BALL_GROUND_MAX_SPEED);
+    }
   }
 
   // 접촉 중 재발동 방지 쿨다운. 통과하면 true를 반환하며 타이머를 갱신한다.

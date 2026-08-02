@@ -205,25 +205,11 @@ export class PlayScene extends Phaser.Scene {
       new Goal(this, "right", WORLD_WIDTH, groundTop),
     ];
 
-    // 충돌 설정
+    // 충돌 설정. 공↔플레이어는 Arcade 콜라이더(이산 판정) 대신 매 프레임 게임 레벨
+    // 리졸버(resolveBallVsPlayers)가 전담한다 — 연속/고속 충돌에서도 관통을 막고
+    // '킥/헤딩/공 위 올라타기 방지'를 한곳에서 확정적으로 처리하기 위함.
     for (const p of [this.player1, this.player2]) {
       this.physics.add.collider(p.sprite, this.field.ground);
-      this.physics.add.collider(p.sprite, this.ball.sprite, () => {
-        // 공이 플레이어 발밑에서 수직으로 떠받쳐지는 상태(위에 올라탐)인지 위치로 판별한다.
-        // (body.touching 플래그는 같은 스텝의 다른 콜라이더-예: 바닥-와 뒤섞일 수 있어
-        // 신뢰할 수 없다. 기하학적으로 '발밑 근처·아래'인지 직접 확인한다.)
-        const dx = Math.abs(this.ball.sprite.x - p.sprite.x);
-        const dy = this.ball.sprite.y - p.sprite.y; // 양수: 공이 플레이어보다 아래(발밑)
-        const standingOnBall =
-          dy > PLAYER_HEIGHT * 0.25 && dx < PLAYER_WIDTH * 0.4;
-        if (standingOnBall) {
-          this.ball.stomp(p.sprite.x);
-        } else {
-          // 충돌 시 공을 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
-          const body = p.sprite.body as Phaser.Physics.Arcade.Body;
-          this.ball.kick(p.sprite.x, body.velocity.x);
-        }
-      });
     }
     this.physics.add.collider(this.ball.sprite, this.field.ground);
     // 캐릭터 간 충돌 (명세 2.4.2)
@@ -579,65 +565,48 @@ export class PlayScene extends Phaser.Scene {
     if (hit) (hit.body as Phaser.Physics.Arcade.Body).reset(x, y);
   }
 
-  // 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었는지 감지해, 끼었으면 위로 탈출시킨다.
-  // 좌우 양쪽에서 눌린 공을 Arcade가 분리하려다 한쪽으로 순간이동시켜 '몸을 뚫는' 현상을
-  // 막는다 — 위로는 캐릭터가 못 막으므로 공을 위로 빼내는 게 가장 안정적이다.
-  private relieveSqueeze(): void {
+  // 공↔플레이어 충돌을 매 프레임 확정적으로 처리(host/local). Arcade 이산 콜라이더의
+  // 한계(고속/연속 충돌 시 관통·끼임·공 위 올라타기)를 게임 레벨에서 원천 차단한다.
+  //  (1) 이번 프레임에 플레이어 중심을 가로지름 → 관통. 원래 쪽 표면으로 스냅 + 반사.
+  //  (2) 위에서 히트(공이 플레이어보다 충분히 아래) → 무조건 옆으로 튕김(스톰프).
+  //  (3) 옆에서 겹침 → 바깥으로 밀어내고 킥(각도로 캐릭터 키를 넘김).
+  private resolveBallVsPlayers(): void {
     const bx = this.ball.sprite.x;
     const by = this.ball.sprite.y;
-    let leftPress = false; // 공의 왼쪽에서 누르는 몸이 있음
-    let rightPress = false; // 공의 오른쪽에서 누르는 몸이 있음
+    const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
+    const halfW = PLAYER_WIDTH / 2 + BALL_RADIUS;
+    const halfH = PLAYER_HEIGHT / 2 + BALL_RADIUS;
 
-    // 캐릭터 두 명 검사(세로로 겹치고 수평으로 맞닿을 만큼 가까울 때만).
     for (const p of [this.player1, this.player2]) {
-      const dx = bx - p.sprite.x;
-      const vClose =
-        Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
-      const hClose = Math.abs(dx) < PLAYER_WIDTH / 2 + BALL_RADIUS + 4;
-      if (!(vClose && hClose)) continue;
-      if (dx >= 0)
-        leftPress = true; // 몸이 공보다 왼쪽 → 왼쪽에서 누름
-      else rightPress = true;
-    }
+      const px = p.sprite.x;
+      const py = p.sprite.y;
+      const dx = bx - px;
+      const dy = by - py; // 양수: 공이 플레이어보다 아래
+      const vClose = Math.abs(dy) < halfH;
 
-    // 월드 좌우 벽에 바짝 붙은 것도 한쪽 압력으로 취급(벽↔캐릭터 사이 끼임 포함).
-    if (bx <= BALL_RADIUS + 2) leftPress = true;
-    if (bx >= WORLD_WIDTH - BALL_RADIUS - 2) rightPress = true;
+      // (1) 관통(중심 가로지름) — 원래 쪽 표면으로 되돌리고 그 방향으로 반사.
+      if (
+        !Number.isNaN(this.prevBallX) &&
+        vClose &&
+        Math.abs(this.prevBallX - px) > 1 &&
+        Math.sign(this.prevBallX - px) !== Math.sign(dx)
+      ) {
+        const side = Math.sign(this.prevBallX - px) || 1;
+        this.ball.sprite.x = px + side * halfW;
+        this.ball.sprite.setVelocityX(side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED));
+        continue;
+      }
 
-    if (leftPress && rightPress) {
-      // 덜 눌린 쪽으로 살짝 밀며 위로 탈출. 여기선 방향 편향 없이 위로만 빼도 충분.
-      this.ball.escapeUp(0);
-    }
-  }
-
-  // 스윕 관통 가드: 이번 프레임에 공이 플레이어 중심을 '가로질렀는데' 몸통 높이에서
-  // 겹쳐 있었다면(=몸을 통과) 원래 있던 쪽 바깥으로 되돌리고 그쪽으로 튕겨낸다.
-  // kick()의 방향이 깊은 관통 시 뒤집혀 공을 몸 반대편으로 쏘거나, 빠른 속도로
-  // 한 스텝에 몸을 지나치는 경우 등 '원인과 무관하게' 관통 자체를 잡는 안전망이다.
-  private preventPassThrough(): void {
-    const bx = this.ball.sprite.x;
-    const by = this.ball.sprite.y;
-    if (!Number.isNaN(this.prevBallX)) {
-      for (const p of [this.player1, this.player2]) {
-        const px = p.sprite.x;
-        const vClose =
-          Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
-        if (!vClose) continue;
-        const prev = this.prevBallX - px; // 직전 프레임 공의 좌우 오프셋
-        const cur = bx - px; // 현재 오프셋
-        // 부호가 반전됐고(중심 통과) 직전에 몸 안쪽까지 들어와 있었다면 관통으로 본다.
-        if (
-          Math.sign(prev) !== 0 &&
-          Math.sign(prev) !== Math.sign(cur) &&
-          Math.abs(prev) > 4
-        ) {
-          const side = Math.sign(prev);
-          const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
-          this.ball.sprite.x = px + side * (PLAYER_WIDTH / 2 + BALL_RADIUS + 1);
-          this.ball.sprite.setVelocityX(
-            side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED),
-          );
-          break;
+      // (2)(3) 겹침 처리.
+      if (Math.abs(dx) < halfW && vClose) {
+        if (dy > PLAYER_HEIGHT * 0.45) {
+          // 공이 플레이어보다 충분히 아래 = 플레이어가 공 위에 올라타려는 상태 → 무조건 옆으로.
+          this.ball.stomp(px);
+        } else {
+          const side = dx >= 0 ? 1 : -1;
+          this.ball.sprite.x = px + side * halfW; // 몸 밖으로 밀어냄(겹침/관통 방지)
+          const pvx = (p.sprite.body as Phaser.Physics.Arcade.Body).velocity.x;
+          this.ball.kick(px, pvx); // 각도(lift)로 캐릭터 키를 넘겨 아치
         }
       }
     }
@@ -711,10 +680,10 @@ export class PlayScene extends Phaser.Scene {
     // 공 회전(비주얼): host/guest/local 어느 쪽이든 현재 속도 기준으로 매 프레임 굴린다.
     this.ball.update(delta);
 
-    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출 + 스윕 관통 가드.
+    // 실제 물리가 도는 host/local에서만: 공↔플레이어 충돌 확정 처리 + 바닥 구름 속도 상한.
     if (this.mode !== "guest") {
-      this.relieveSqueeze();
-      this.preventPassThrough();
+      this.resolveBallVsPlayers();
+      this.ball.capGroundSpeed();
     }
 
     if (this.mode === "guest") {
