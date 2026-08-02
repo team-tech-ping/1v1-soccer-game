@@ -14,6 +14,7 @@ import {
   INPUT_HZ,
   MATCH_DURATION_MS,
   BALL_RADIUS,
+  BALL_MIN_KICK_SPEED,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -63,6 +64,7 @@ export class PlayScene extends Phaser.Scene {
   private goals: Goal[] = [];
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
+  private prevBallX = NaN; // 스윕 관통 감지용: 직전 프레임 공 x
 
   private motion = new MotionController();
   private scoreText!: Phaser.GameObjects.Text;
@@ -129,6 +131,7 @@ export class PlayScene extends Phaser.Scene {
     this.matchEnded = false;
     this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
     this.lastKnownRemainingMs = MATCH_DURATION_MS;
+    this.prevBallX = NaN;
     this.leaveDebounce = null;
 
     this.guestView = new GuestView();
@@ -550,6 +553,35 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
+  // 스윕 관통 가드: 이번 프레임에 공이 플레이어 중심을 '가로질렀는데' 몸통 높이에서
+  // 겹쳐 있었다면(=몸을 통과) 원래 있던 쪽 바깥으로 되돌리고 그쪽으로 튕겨낸다.
+  // kick()의 방향이 깊은 관통 시 뒤집혀 공을 몸 반대편으로 쏘거나, 빠른 속도로
+  // 한 스텝에 몸을 지나치는 경우 등 '원인과 무관하게' 관통 자체를 잡는 안전망이다.
+  private preventPassThrough(): void {
+    const bx = this.ball.sprite.x;
+    const by = this.ball.sprite.y;
+    if (!Number.isNaN(this.prevBallX)) {
+      for (const p of [this.player1, this.player2]) {
+        const px = p.sprite.x;
+        const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+        if (!vClose) continue;
+        const prev = this.prevBallX - px; // 직전 프레임 공의 좌우 오프셋
+        const cur = bx - px; // 현재 오프셋
+        // 부호가 반전됐고(중심 통과) 직전에 몸 안쪽까지 들어와 있었다면 관통으로 본다.
+        if (Math.sign(prev) !== 0 && Math.sign(prev) !== Math.sign(cur) && Math.abs(prev) > 4) {
+          const side = Math.sign(prev);
+          const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
+          this.ball.sprite.x = px + side * (PLAYER_WIDTH / 2 + BALL_RADIUS + 1);
+          this.ball.sprite.setVelocityX(
+            side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED)
+          );
+          break;
+        }
+      }
+    }
+    this.prevBallX = bx;
+  }
+
   // 미니맵을 매 프레임 다시 그린다: 배경 → 골대 → 현재 화면(뷰포트) 박스 →
   // 공·두 캐릭터 도트(내 캐릭터는 흰 테두리로 강조). 화면 밖 캐릭터 위치를 한눈에.
   private updateMinimap(): void {
@@ -603,8 +635,11 @@ export class PlayScene extends Phaser.Scene {
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
 
-    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출시켜 관통 방지.
-    if (this.mode !== "guest") this.relieveSqueeze();
+    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출 + 스윕 관통 가드.
+    if (this.mode !== "guest") {
+      this.relieveSqueeze();
+      this.preventPassThrough();
+    }
 
     if (this.mode === "guest") {
       this.updateGuest(now);
