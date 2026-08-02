@@ -152,19 +152,19 @@ export class HomeScene extends Phaser.Scene {
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
   }
 
-  // 방 만들기 → 경기 방식 선택 화면. 방식을 고르면 그 방식으로 방이 만들어진다.
-  private renderModeSelect(): void {
+  // 경기 방식 선택 화면(방 만들기·빠른 매칭 공용). 고르면 onPick(mode)을 호출한다.
+  private renderModeSelect(subtitle: string, onPick: (mode: MatchMode) => void): void {
     const card = this.mountCard();
     card.appendChild(this.el("h1", "msg-home-title", "경기 방식 선택"));
-    card.appendChild(this.el("p", "msg-home-sub", "선택하면 방이 만들어집니다"));
+    card.appendChild(this.el("p", "msg-home-sub", subtitle));
 
     const timeBtn = this.el("button", "msg-home-btn msg-home-primary", "⏱ 시간제 · 90초") as HTMLButtonElement;
     timeBtn.style.marginBottom = "8px";
-    timeBtn.onclick = () => this.createRoom("time");
+    timeBtn.onclick = () => onPick("time");
     card.appendChild(timeBtn);
 
     const scoreBtn = this.el("button", "msg-home-btn msg-home-primary", "🥅 점수제 · 선취 5점") as HTMLButtonElement;
-    scoreBtn.onclick = () => this.createRoom("score");
+    scoreBtn.onclick = () => onPick("score");
     card.appendChild(scoreBtn);
 
     const backBtn = this.el("button", "msg-home-btn msg-home-ghost", "← 뒤로") as HTMLButtonElement;
@@ -231,7 +231,13 @@ export class HomeScene extends Phaser.Scene {
     card.appendChild(cancelBtn);
   }
 
+  // 빠른 매칭 → 방식 선택 → 같은 방식 큐로 매칭.
   private onQuickMatch(): void {
+    this.renderModeSelect("선택한 방식끼리 매칭됩니다", (mode) => this.startQuickMatch(mode));
+  }
+
+  private startQuickMatch(mode: MatchMode): void {
+    this.matchMode = mode;
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
       this.renderLobby("매칭 서버(VITE_SIGNAL_URL)가 설정되지 않았습니다");
@@ -241,7 +247,7 @@ export class HomeScene extends Phaser.Scene {
     const mm = new MatchmakingClient(url);
     this.matchmaker = mm;
     mm
-      .start((result) => {
+      .start(mode, (result) => {
         mm.cancel(); // 매칭 완료 → 매칭 소켓 정리
         this.matchmaker = null;
         this.renderWaiting("매칭 완료!", result.code, "연결하는 중…");
@@ -283,7 +289,7 @@ export class HomeScene extends Phaser.Scene {
   }
 
   private onCreate(): void {
-    this.renderModeSelect();
+    this.renderModeSelect("선택하면 방이 만들어집니다", (mode) => this.createRoom(mode));
   }
 
   private onJoin(raw: string): void {

@@ -57,4 +57,30 @@ describe("MatchQueue", () => {
     expect(a.inbox).toHaveLength(0);
     expect(q.waitingCount).toBe(1);
   });
+
+  it("다른 방식끼리는 매칭되지 않고, 같은 방식끼리만 짝지어진다", () => {
+    const q = new MatchQueue(() => "MODE");
+    const a = fakePeer("a"); // time
+    const b = fakePeer("b"); // score
+    const c = fakePeer("c"); // time
+    q.enqueue(a, "time");
+    q.enqueue(b, "score");
+    expect(a.inbox).toHaveLength(0); // 방식이 달라 매칭 안 됨
+    expect(b.inbox).toHaveLength(0);
+    expect(q.waitingCount).toBe(2); // 방식별로 각각 1명 대기
+
+    q.enqueue(c, "time"); // a와 같은 방식 → 매칭
+    expect(a.inbox).toContainEqual({ t: "matched", code: "MODE", role: "host" });
+    expect(c.inbox).toContainEqual({ t: "matched", code: "MODE", role: "guest" });
+    expect(b.inbox).toHaveLength(0); // score 대기자는 그대로
+    expect(q.waitingCount).toBe(1);
+  });
+
+  it("다른 방식으로 재진입하면 이전 방식 큐에서 빠진다(중복 대기 방지)", () => {
+    const q = new MatchQueue(() => "ZZZZ");
+    const a = fakePeer("a");
+    q.enqueue(a, "time");
+    q.enqueue(a, "score"); // 방식 변경
+    expect(q.waitingCount).toBe(1); // time 큐에서 빠지고 score 큐에만
+  });
 });
