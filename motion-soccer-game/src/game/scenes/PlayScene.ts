@@ -578,17 +578,19 @@ export class PlayScene extends Phaser.Scene {
     const halfW = PLAYER_WIDTH / 2 + BALL_RADIUS;
     const halfH = PLAYER_HEIGHT / 2 + BALL_RADIUS;
 
-    // (0) 두 몸(또는 몸↔벽) 사이에 낀 경우: 개별 킥으로 좌우를 밀면 무한 핀퐁이 되므로,
+    // (0) 두 몸(또는 몸↔벽) 사이에 갇힌 경우: 개별 킥으로 좌우를 밀면 무한 핀퐁이 되므로,
     // 아무도 막을 수 없는 '위'로 빼낸다(수평 속도 0으로 만들어 왕복 자체를 끊는다).
+    // 핵심: '지금 겹침'이 아니라 '양쪽에 몸이 가까이 있음(가둠)'으로 판정한다 — 킥이 공을
+    // 즉시 반대편으로 보내 매 프레임 한 명만 겹치므로, 겹침 기준으론 트랩을 못 잡는다.
+    const trap = halfW + 24; // 몸 표면에서 이 거리 이내면 '그 쪽에서 가둠'으로 본다
     let leftPress = bx <= BALL_RADIUS + 2; // 왼쪽 월드 벽
     let rightPress = bx >= WORLD_WIDTH - BALL_RADIUS - 2; // 오른쪽 월드 벽
     for (const p of [this.player1, this.player2]) {
       const dx = bx - p.sprite.x;
       const vClose = Math.abs(by - p.sprite.y) < halfH;
-      const hClose = Math.abs(dx) < halfW + 2;
-      if (vClose && hClose) {
-        if (dx >= 0) leftPress = true; // 몸이 공의 왼쪽에서 누름
-        else rightPress = true; // 몸이 공의 오른쪽에서 누름
+      if (vClose && Math.abs(dx) < trap) {
+        if (dx >= 0) leftPress = true; // 몸이 공의 왼쪽에서 가둠
+        else rightPress = true; // 몸이 공의 오른쪽에서 가둠
       }
     }
     if (leftPress && rightPress) {
