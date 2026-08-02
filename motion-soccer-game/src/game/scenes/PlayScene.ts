@@ -6,6 +6,7 @@ import {
   GROUND_HEIGHT,
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
+  PLAYER_COLOR,
   PLAYER2_COLOR,
   GOAL_COOLDOWN_MS,
   SNAPSHOT_HZ,
@@ -60,6 +61,9 @@ export class PlayScene extends Phaser.Scene {
   private fpsText!: Phaser.GameObjects.Text;
   private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
+  // 내 캐릭터가 화면 밖일 때 방향을 가리키는 화살표(+거리) — 화면에 고정.
+  private myArrow!: Phaser.GameObjects.Triangle;
+  private myArrowText!: Phaser.GameObjects.Text;
 
   private scoreLeft = 0;
   private scoreRight = 0;
@@ -291,6 +295,27 @@ export class PlayScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
+
+    // 내 캐릭터가 화면 밖으로 나가면 그 방향을 가리키는 화살표(+거리).
+    // 오른쪽을 가리키는 삼각형으로 만들고, 왼쪽일 땐 회전(π)으로 뒤집는다. 내 색으로.
+    const myColor = this.mode === "guest" ? PLAYER2_COLOR : PLAYER_COLOR;
+    this.myArrow = this.add
+      .triangle(0, 0, 0, -13, 0, 13, 22, 0, myColor)
+      .setScrollFactor(0)
+      .setDepth(1500)
+      .setVisible(false);
+    this.myArrowText = this.add
+      .text(0, 0, "", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#e0e1dd",
+        backgroundColor: "#00000099",
+        padding: { x: 4, y: 1 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(1500)
+      .setVisible(false);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       if (this.leaveDebounce !== null) {
@@ -563,6 +588,41 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
+  // 내 캐릭터가 뷰포트 밖이면 화면 가장자리에 그 방향 화살표(+거리)를 표시한다.
+  // 카메라는 공을 따라가므로 공에서 멀어진 내 캐릭터를 놓치지 않게 돕는다.
+  private updateMyArrow(): void {
+    const cam = this.cameras.main;
+    const me = this.mode === "guest" ? this.player2 : this.player1;
+    const x = me.sprite.x;
+    const left = cam.scrollX;
+    const right = cam.scrollX + GAME_WIDTH;
+
+    let show = false;
+    let edgeX = 0;
+    let rot = 0;
+    let dist = 0;
+    if (x < left) {
+      show = true;
+      edgeX = 26;
+      rot = Math.PI; // 왼쪽 가리킴
+      dist = Math.round(left - x);
+    } else if (x > right) {
+      show = true;
+      edgeX = GAME_WIDTH - 26;
+      rot = 0; // 오른쪽 가리킴
+      dist = Math.round(x - right);
+    }
+
+    this.myArrow.setVisible(show);
+    this.myArrowText.setVisible(show);
+    if (!show) return;
+
+    // 화살표의 세로 위치는 내 캐릭터의 화면상 높이에 맞춘다(가장자리 안쪽으로 clamp).
+    const y = Phaser.Math.Clamp(me.sprite.y - cam.scrollY, 44, GAME_HEIGHT - 44);
+    this.myArrow.setPosition(edgeX, y).setRotation(rot);
+    this.myArrowText.setPosition(edgeX, y + 18).setText(`${dist}`);
+  }
+
   update(_time: number, delta: number): void {
     const now = performance.now();
 
@@ -603,6 +663,7 @@ export class PlayScene extends Phaser.Scene {
     if (this.matchEnded) return;
 
     this.positionCameras();
+    this.updateMyArrow();
     this.updateStatus();
 
     if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
