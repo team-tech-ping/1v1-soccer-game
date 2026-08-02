@@ -1,5 +1,10 @@
 import Phaser from "phaser";
-import { WORLD_WIDTH, GAME_HEIGHT, GROUND_HEIGHT, GROUND_COLOR } from "../../config";
+import {
+  WORLD_WIDTH,
+  GAME_HEIGHT,
+  GROUND_HEIGHT,
+  GROUND_COLOR,
+} from "../../config";
 
 const GROUND_TEXTURE = "ground";
 
@@ -10,6 +15,22 @@ export class Field {
 
   constructor(scene: Phaser.Scene) {
     const groundTop = GAME_HEIGHT - GROUND_HEIGHT;
+    const groundCenterY = GAME_HEIGHT - GROUND_HEIGHT / 2;
+
+    // 스타디움 배경: 뷰포트에 고정하지 않고 월드 전체 폭(WORLD_WIDTH)에 걸쳐 깐다.
+    // 그라운드/캐릭터와 같은 좌표계(scrollFactor 기본값 1)로 스크롤되므로, 카메라가
+    // 공을 따라 좌우로 움직이면 이미지의 다른 부분이 자연스럽게 드러난다(고정 배경일 때는
+    // 어디서든 같은 그림이라 실제로 이동하는 느낌이 안 났음).
+    // 원본 종횡비를 유지한 채 가로만 WORLD_WIDTH에 맞추고, 세로는 그만큼 커져 뷰포트
+    // 위로 넘치게 두되(하늘 쪽이라 잘려도 티 안 남) 바닥(잔디) 쪽을 화면 하단에 고정한다.
+    // offsetY(123)는 슬라이더로 실험해 하늘이 적당히 보이도록 찾은 값.
+    const STADIUM_OFFSET_Y = 123;
+    const stadiumBg = scene.add
+      .image(WORLD_WIDTH / 2, GAME_HEIGHT + STADIUM_OFFSET_Y, "stadium-daytime")
+      .setOrigin(0.5, 1)
+      .setDepth(-10);
+    const stadiumHeight = WORLD_WIDTH * (stadiumBg.height / stadiumBg.width);
+    stadiumBg.setDisplaySize(WORLD_WIDTH, stadiumHeight);
 
     // 배경 마커: 스크롤이 눈에 보이도록 세로 줄과 중앙선을 그린다.
     const deco = scene.add.graphics();
@@ -31,8 +52,9 @@ export class Field {
 
     this.ground = scene.physics.add.staticImage(
       WORLD_WIDTH / 2,
-      GAME_HEIGHT - GROUND_HEIGHT / 2,
-      GROUND_TEXTURE
+      groundCenterY,
+      GROUND_TEXTURE,
     );
+    this.ground.setVisible(false); // 충돌 전용 — 실제로 보이는 잔디는 스타디움 배경 그림 자체
   }
 }

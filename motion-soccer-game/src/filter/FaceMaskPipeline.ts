@@ -19,14 +19,16 @@ export class FaceMaskPipeline {
 
   constructor(
     private readonly video: HTMLVideoElement,
-    animalId: string = DEFAULT_ANIMAL_ID
+    private readonly initialAnimalId: string = DEFAULT_ANIMAL_ID
   ) {
     this.renderer = new AnimalMaskRenderer(FilterConfig.canvasWidth, FilterConfig.canvasHeight);
-    this.renderer.setAnimal(animalId);
   }
 
   async init(): Promise<void> {
-    await this.detector.init();
+    await Promise.all([
+      this.detector.init(),
+      this.renderer.setAnimal(this.initialAnimalId),
+    ]);
     this.initialized = true;
   }
 
@@ -34,8 +36,8 @@ export class FaceMaskPipeline {
     return this.initialized;
   }
 
-  setAnimal(animalId: string): void {
-    this.renderer.setAnimal(animalId);
+  async setAnimal(animalId: string): Promise<void> {
+    await this.renderer.setAnimal(animalId);
   }
 
   update(nowMs: number): void {
