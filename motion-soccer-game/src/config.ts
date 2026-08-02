@@ -62,5 +62,7 @@ export const ROOM_CODE_LENGTH = 4;
 // 혼동 문자(0/O, 1/I) 제외한 대문자+숫자
 export const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-// 경기 시간
-export const MATCH_DURATION_MS = 90_000; // 90초
+// 경기 방식
+export type MatchMode = "time" | "score";
+export const MATCH_DURATION_MS = 90_000; // 시간제: 90초
+export const SCORE_TARGET = 5; // 점수제: 선취 점수

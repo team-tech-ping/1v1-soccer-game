@@ -13,6 +13,8 @@ import {
   SNAPSHOT_HZ,
   INPUT_HZ,
   MATCH_DURATION_MS,
+  SCORE_TARGET,
+  type MatchMode,
   BALL_RADIUS,
   BALL_MIN_KICK_SPEED,
 } from "../../config";
@@ -75,7 +77,8 @@ export class PlayScene extends Phaser.Scene {
   private scoreRight = 0;
   private lastGoalAt = 0;
 
-  // 경기 시간
+  // 경기 방식/시간
+  private matchMode: MatchMode = "time";
   private matchStartAt = 0;
   private matchEnded = false;
   private clockText!: Phaser.GameObjects.Text;
@@ -113,12 +116,14 @@ export class PlayScene extends Phaser.Scene {
     roomCode?: string;
     filterEnabled?: boolean;
     animalId?: string;
+    matchMode?: MatchMode;
   }): void {
     this.session = data.session ?? null;
     this.roomCode = data.roomCode ?? null;
     this.mode = this.session ? this.session.role : "local";
     this.filterEnabled = data.filterEnabled ?? false;
     this.animalId = data.animalId ?? DEFAULT_ANIMAL_ID;
+    this.matchMode = data.matchMode ?? "time";
 
     // Phaser는 scene.start()를 다시 호출해도 씬 인스턴스를 새로 만들지 않고 재사용한다.
     // 클래스 필드 초기값(= 0, null 등)은 객체 생성 시 단 한 번만 적용되므로, 두 번째
@@ -240,8 +245,11 @@ export class PlayScene extends Phaser.Scene {
       .setScrollFactor(0);
     this.updateScoreboard();
 
+    // 시간제는 남은 시간, 점수제는 목표 점수를 상단에 표시.
+    const clockInit =
+      this.matchMode === "score" ? `선취 ${SCORE_TARGET}점` : this.formatClock(MATCH_DURATION_MS);
     this.clockText = this.add
-      .text(GAME_WIDTH / 2, 52, this.formatClock(MATCH_DURATION_MS), {
+      .text(GAME_WIDTH / 2, 52, clockInit, {
         fontFamily: "monospace",
         fontSize: "16px",
         color: "#8fa3bf",
@@ -651,11 +659,14 @@ export class PlayScene extends Phaser.Scene {
 
       if (this.mode === "host") this.maybeSendSnapshot(now);
 
+      // 시간제에서만 타이머를 표시하고 0에서 종료. 점수제는 상단 라벨('선취 N점') 고정.
       const remaining = this.remainingMs();
       this.lastKnownRemainingMs = remaining;
-      this.clockText.setText(this.formatClock(remaining));
-      if (remaining <= 0 && !this.matchEnded) {
-        this.endMatch();
+      if (this.matchMode === "time") {
+        this.clockText.setText(this.formatClock(remaining));
+        if (remaining <= 0 && !this.matchEnded) {
+          this.endMatch();
+        }
       }
     }
 
@@ -679,6 +690,16 @@ export class PlayScene extends Phaser.Scene {
     else this.scoreLeft++;
 
     this.updateScoreboard();
+
+    // 점수제: 한쪽이 목표 점수에 먼저 도달하면 즉시 종료(리셋/연출 없이 결과로).
+    if (
+      this.matchMode === "score" &&
+      (this.scoreLeft >= SCORE_TARGET || this.scoreRight >= SCORE_TARGET)
+    ) {
+      this.endMatch();
+      return;
+    }
+
     this.cameras.main.flash(200, 255, 255, 255);
     this.ball.reset();
     this.player1.reset();
@@ -730,10 +751,13 @@ export class PlayScene extends Phaser.Scene {
     if (this.matchEnded) return;
     // 시작 직후 설정 중의 일시적 presence 흔들림은 무시(오탐 방지).
     if (performance.now() - this.matchStartAt < 1500) return;
-    // 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가 채널을 떠나며
-    // presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮어쓰는 것을 막는다.
-    const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
-    if (remaining <= 3000) return;
+    // (시간제 한정) 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가
+    // 채널을 떠나며 presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮는 것 방지.
+    // 점수제는 남은 시간이 의미가 없으므로(90초 지나 0이 됨) 이 가드를 적용하지 않는다.
+    if (this.matchMode === "time") {
+      const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
+      if (remaining <= 3000) return;
+    }
 
     this.matchEnded = true;
     this.physics.world.pause();
@@ -824,7 +848,7 @@ export class PlayScene extends Phaser.Scene {
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
       this.lastKnownRemainingMs = s.clockMs;
-      this.clockText.setText(this.formatClock(s.clockMs));
+      if (this.matchMode === "time") this.clockText.setText(this.formatClock(s.clockMs));
       if (s.phase === "ended" && !this.matchEnded) {
         this.matchEnded = true;
         this.goToResult();

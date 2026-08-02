@@ -4,6 +4,7 @@ import { createSupabaseChannel } from "../../net/SupabaseChannel";
 import { RoomSession, type Role } from "../../net/RoomSession";
 import { MatchmakingClient } from "../../webrtc/MatchmakingClient";
 import { ANIMAL_MASKS, DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
+import type { MatchMode } from "../../config";
 
 // 시작 화면: 방 만들기(host) / 코드 입장(guest). 명세 5.1.
 // 캔버스 위에 '중앙 정렬 카드' 하나(DOM)를 올려 레이아웃을 flexbox로 처리한다.
@@ -79,6 +80,16 @@ const CSS = `
   background: #0b1524; color: #e0e1dd; font-size: 13px;
 }
 .msg-home-filter select:disabled { opacity: 0.4; }
+.msg-home-mode {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 18px 0 4px; font-size: 13px; color: #b8c4d9;
+}
+.msg-home-modebtns { display: flex; gap: 6px; }
+.msg-home-modebtn {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent; color: #e0e1dd; font-size: 12px; cursor: pointer;
+}
+.msg-home-modebtn.on { background: #4cc9f0; color: #08111f; border-color: #4cc9f0; font-weight: 700; }
 `;
 
 export class HomeScene extends Phaser.Scene {
@@ -86,6 +97,7 @@ export class HomeScene extends Phaser.Scene {
   private matchmaker: MatchmakingClient | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
+  private matchMode: MatchMode = "time"; // 방 생성/매칭 시 host로서 고르는 경기 방식
 
   constructor() {
     super("Home");
@@ -145,9 +157,37 @@ export class HomeScene extends Phaser.Scene {
     row.appendChild(joinBtn);
     card.appendChild(row);
 
+    card.appendChild(this.buildModeControls());
     card.appendChild(this.buildFilterControls());
 
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
+  }
+
+  // 경기 방식 선택(방 만들기·빠른 매칭에서 host가 될 때 적용). 시간제/점수제 토글.
+  private buildModeControls(): HTMLElement {
+    const row = this.el("div", "msg-home-mode");
+    row.appendChild(this.el("span", "", "경기 방식"));
+
+    const btns = this.el("div", "msg-home-modebtns");
+    const timeBtn = this.el("button", "msg-home-modebtn", "시간제 90초") as HTMLButtonElement;
+    const scoreBtn = this.el("button", "msg-home-modebtn", "점수제 5점") as HTMLButtonElement;
+    const refresh = () => {
+      timeBtn.classList.toggle("on", this.matchMode === "time");
+      scoreBtn.classList.toggle("on", this.matchMode === "score");
+    };
+    timeBtn.onclick = () => {
+      this.matchMode = "time";
+      refresh();
+    };
+    scoreBtn.onclick = () => {
+      this.matchMode = "score";
+      refresh();
+    };
+    refresh();
+    btns.appendChild(timeBtn);
+    btns.appendChild(scoreBtn);
+    row.appendChild(btns);
+    return row;
   }
 
   // 상대에게 보이는 내 얼굴을 동물 마스크로 가리는 필터 ON/OFF + 종류 선택.
@@ -270,13 +310,14 @@ export class HomeScene extends Phaser.Scene {
   private async enterRoom(code: string, role: Role): Promise<void> {
     try {
       const channel = createSupabaseChannel(code);
-      const session = new RoomSession(channel, role);
+      const session = new RoomSession(channel, role, this.matchMode);
       session.onReady(() => {
         this.scene.start("Play", {
           session,
           roomCode: code,
           filterEnabled: this.filterEnabled,
           animalId: this.animalId,
+          matchMode: session.mode, // host=자신 선택, guest=host로부터 수신
         });
       });
       await session.start();
