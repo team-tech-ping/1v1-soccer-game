@@ -27,8 +27,8 @@ export const PLAYER_JUMP_VELOCITY = -650; // 점프 초기 속도(px/s, 위쪽�
 // 공
 export const BALL_RADIUS = 22;
 export const BALL_COLOR = 0xf1faee;
-export const BALL_BOUNCE = 0.82; // 반발 계수
-export const BALL_DRAG_X = 60; // 굴러갈 때 수평 감속(마찰 근사)
+export const BALL_BOUNCE = 0.68; // 반발 계수 (통제 지향 + 약간의 활발함)
+export const BALL_DRAG_X = 160; // 굴러갈 때 수평 감속(마찰 근사) — 낮으면 미끄러워 통제 불가
 export const BALL_MASS = 0.5; // 플레이어보다 가벼워 잘 밀리도록
 export const BALL_KICK_LIFT = 320; // 충돌 시 위로 떠오르는 속도(px/s) — 포물선
 export const BALL_MIN_KICK_SPEED = 220; // 충돌 시 최소 수평 발사 속도(px/s)
@@ -37,7 +37,7 @@ export const BALL_KICK_COOLDOWN_MS = 180; // 접촉 중 재발동 방지 쿨다�
 export const HEAD_POWER_SCALE = 0.5;
 // 공 최대 속도 상한(안전장치). 연속 킥/헤딩으로 속도가 무한정 커지는 것을 막아
 // 물리 스텝당 이동 거리를 충돌 판정 크기 이내로 유지한다(터널링 방지).
-export const BALL_MAX_VELOCITY_X = 900;
+export const BALL_MAX_VELOCITY_X = 850;
 export const BALL_MAX_VELOCITY_Y = 1400;
 // 플레이어가 공 위에 수직으로 올라탔을 때(스톰프) 옆으로 튕겨나가는 속도/높이.
 export const BALL_STOMP_SPEED = 320;
