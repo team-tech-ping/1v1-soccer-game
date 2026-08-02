@@ -48,6 +48,14 @@ export class Ball {
     body.setMaxVelocity(BALL_MAX_VELOCITY_X, BALL_MAX_VELOCITY_Y);
   }
 
+  // 굴러가는 시각 효과: 수평 속도만큼 매 프레임 회전시킨다(미끄러짐 없는 굴림 근사,
+  // 각속도 = 선속도 / 반지름). host/guest/local 어느 쪽이든 스프라이트 속도 기준으로
+  // 계산하므로 물리 권위와 무관하게 항상 자연스럽게 굴러 보인다.
+  update(delta: number): void {
+    const body = this.sprite.body as Phaser.Physics.Arcade.Body;
+    this.sprite.rotation += (body.velocity.x * (delta / 1000)) / BALL_RADIUS;
+  }
+
   // 플레이어와 부딪히면 플레이어 반대 방향으로 튕겨내며 포물선을 그리게 한다.
   // 플레이어가 dynamic 바디라 공의 운동량을 흡수하는 문제를 피하기 위해,
   // 충돌 순간 공의 나가는 속도를 직접 계산해 덮어쓴다.

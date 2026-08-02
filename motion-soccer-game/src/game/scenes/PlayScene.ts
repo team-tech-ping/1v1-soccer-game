@@ -156,6 +156,19 @@ export class PlayScene extends Phaser.Scene {
     this.filterBusy = false;
   }
 
+  preload(): void {
+    for (const set of [HOST_TEXTURES, GUEST_TEXTURES]) {
+      for (const key of [set.front, set.jump, ...set.run]) {
+        this.load.image(key, `/assets/player/${key}.png`);
+      }
+    }
+    this.load.image("soccer-ball", "/assets/soccer/soccer-ball.png");
+    this.load.image(
+      "stadium-daytime",
+      "/assets/soccer/stadium_daytime_long.png",
+    );
+  }
+
   create(): void {
     // performance.now()를 쓴다(this.time.now가 아니라): Phaser의 scene.time.now는
     // 씬이 비활성인 동안 갱신되지 않아, 재매칭 시 create()에서 읽으면 '이전 경기
@@ -689,11 +702,14 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  update(): void {
+  update(_time: number, delta: number): void {
     const now = performance.now();
 
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
+
+    // 공 회전(비주얼): host/guest/local 어느 쪽이든 현재 속도 기준으로 매 프레임 굴린다.
+    this.ball.update(delta);
 
     // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출 + 스윕 관통 가드.
     if (this.mode !== "guest") {

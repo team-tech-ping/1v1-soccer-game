@@ -10,7 +10,7 @@ import {
 } from "../../config";
 
 type Pose = "front" | "run" | "jump";
-const RUN_FRAME_HOLD = 2; // update() 호출 몇 번마다 다음 러닝 프레임으로 넘어갈지
+const RUN_FRAME_HOLD = 3; // update() 호출 몇 번마다 다음 러닝 프레임으로 넘어갈지
 
 export interface PlayerTextureSet {
   front: string;
