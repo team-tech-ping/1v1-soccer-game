@@ -6,12 +6,17 @@ import {
   GROUND_HEIGHT,
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
+  PLAYER_COLOR,
   PLAYER2_COLOR,
+  GOAL_HEIGHT,
   GOAL_COOLDOWN_MS,
   SNAPSHOT_HZ,
   INPUT_HZ,
   MATCH_DURATION_MS,
+  SCORE_TARGET,
+  type MatchMode,
   BALL_RADIUS,
+  BALL_MIN_KICK_SPEED,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -41,6 +46,14 @@ import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 // 캐릭터 머리 위 원형 카메라 지름(px). 나/상대 동일.
 const CAM_DIAMETER = 64;
 
+// 미니맵(우하단): 월드가 가로로 넓어(2880x540) 가로로 긴 띠가 된다.
+const MM_WIDTH = 220;
+const MM_MARGIN = 12;
+const MM_SCALE = MM_WIDTH / WORLD_WIDTH; // 월드→미니맵 균일 축척
+const MM_HEIGHT = GAME_HEIGHT * MM_SCALE;
+const MM_X = GAME_WIDTH - MM_WIDTH - MM_MARGIN; // 좌상단 원점
+const MM_Y = GAME_HEIGHT - MM_HEIGHT - MM_MARGIN;
+
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
 // - 양 끝 골대에 공이 들어가면 해당 스코어가 오른다.
@@ -52,20 +65,20 @@ export class PlayScene extends Phaser.Scene {
   private player2!: Player;
   private goals: Goal[] = [];
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private resetKey!: Phaser.Input.Keyboard.Key;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
+  private prevBallX = NaN; // 스윕 관통 감지용: 직전 프레임 공 x
 
   private motion = new MotionController();
-  private statusText!: Phaser.GameObjects.Text;
-  private fpsText!: Phaser.GameObjects.Text;
-  private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
+  // 미니맵(전체 필드 축소도) — 매 프레임 다시 그린다. 화면에 고정.
+  private minimap!: Phaser.GameObjects.Graphics;
 
   private scoreLeft = 0;
   private scoreRight = 0;
   private lastGoalAt = 0;
 
-  // 경기 시간
+  // 경기 방식/시간
+  private matchMode: MatchMode = "time";
   private matchStartAt = 0;
   private matchEnded = false;
   private clockText!: Phaser.GameObjects.Text;
@@ -88,13 +101,11 @@ export class PlayScene extends Phaser.Scene {
   private cameraShare: CameraShare | null = null;
   private localCam: Phaser.GameObjects.Video | null = null;
   private remoteCam: Phaser.GameObjects.Video | null = null;
-  private overlaysActive = true;
   private faceMask: FaceMaskPipeline | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
   private filterBusy = false; // 필터 토글 중복 실행 방지(init 시 비동기)
-  private prevBallX = NaN; // 진단용: 공-플레이어 관통(터널링) 감지
 
   constructor() {
     super("Play");
@@ -105,12 +116,14 @@ export class PlayScene extends Phaser.Scene {
     roomCode?: string;
     filterEnabled?: boolean;
     animalId?: string;
+    matchMode?: MatchMode;
   }): void {
     this.session = data.session ?? null;
     this.roomCode = data.roomCode ?? null;
     this.mode = this.session ? this.session.role : "local";
     this.filterEnabled = data.filterEnabled ?? false;
     this.animalId = data.animalId ?? DEFAULT_ANIMAL_ID;
+    this.matchMode = data.matchMode ?? "time";
 
     // Phaser는 scene.start()를 다시 호출해도 씬 인스턴스를 새로 만들지 않고 재사용한다.
     // 클래스 필드 초기값(= 0, null 등)은 객체 생성 시 단 한 번만 적용되므로, 두 번째
@@ -123,6 +136,7 @@ export class PlayScene extends Phaser.Scene {
     this.matchEnded = false;
     this.matchStartAt = 0; // create()에서 다시 정확히 설정된다
     this.lastKnownRemainingMs = MATCH_DURATION_MS;
+    this.prevBallX = NaN;
     this.leaveDebounce = null;
 
     this.guestView = new GuestView();
@@ -137,11 +151,9 @@ export class PlayScene extends Phaser.Scene {
     this.cameraShare = null;
     this.localCam = null;
     this.remoteCam = null;
-    this.overlaysActive = true;
     this.faceMask = null;
     this.filterToggleText = null;
     this.filterBusy = false;
-    this.prevBallX = NaN;
   }
 
   create(): void {
@@ -202,34 +214,25 @@ export class PlayScene extends Phaser.Scene {
     cam.startFollow(this.ball.sprite, true, 0.1, 0.1);
     cam.setDeadzone(GAME_WIDTH * 0.5, GAME_HEIGHT);
 
-    // 키보드: 폴백 이동 + 공 리셋(R) + 캘리브레이션(C)
+    // 키보드: 폴백 이동 + 캘리브레이션(C)
     const keyboard = this.input.keyboard!;
     this.cursors = keyboard.createCursorKeys();
-    this.resetKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C).on("down", () => {
       this.motion.calibrate();
     });
     this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
-    // 진단용: V 키로 카메라 오버레이 On/Off (디코드/합성 비용 격리)
-    keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.V).on("down", () => this.toggleOverlays());
 
-    // HUD: 카메라에 고정(스크롤 무시).
-    this.statusText = this.add
-      .text(24, 20, "모션: 초기화 중...", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#ffd166",
-      })
-      .setScrollFactor(0);
-
-    // 진단용 FPS 미터 — 실제 렌더 루프 프레임레이트를 표시.
-    this.fpsText = this.add
-      .text(24, 42, "FPS --", {
-        fontFamily: "monospace",
+    // 좌상단 안내: C 키로 얼굴 정면을 다시 맞출 수 있음.
+    this.add
+      .text(24, 20, "C : 얼굴 정면 다시 맞추기", {
+        fontFamily: "sans-serif",
         fontSize: "14px",
-        color: "#90e0ef",
+        color: "#e0e1dd",
+        backgroundColor: "#00000099",
+        padding: { x: 8, y: 4 },
       })
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(1500);
 
     this.scoreText = this.add
       .text(GAME_WIDTH / 2, 14, "", {
@@ -242,8 +245,11 @@ export class PlayScene extends Phaser.Scene {
       .setScrollFactor(0);
     this.updateScoreboard();
 
+    // 시간제는 남은 시간, 점수제는 목표 점수를 상단에 표시.
+    const clockInit =
+      this.matchMode === "score" ? `선취 ${SCORE_TARGET}점` : this.formatClock(MATCH_DURATION_MS);
     this.clockText = this.add
-      .text(GAME_WIDTH / 2, 52, this.formatClock(MATCH_DURATION_MS), {
+      .text(GAME_WIDTH / 2, 52, clockInit, {
         fontFamily: "monospace",
         fontSize: "16px",
         color: "#8fa3bf",
@@ -285,14 +291,9 @@ export class PlayScene extends Phaser.Scene {
         .on("pointerdown", () => void this.toggleFilter());
     }
 
-    this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 26, "C: 정면 보정 · R: 공 리셋", {
-        fontFamily: "sans-serif",
-        fontSize: "14px",
-        color: "#778da9",
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0);
+    // 미니맵: 전체 필드 축소도. 공에 붙어 스크롤되는 카메라 때문에 화면 밖으로 나간
+    // 내 캐릭터 위치를 놓치지 않게 돕는다. 매 프레임 updateMinimap()에서 다시 그린다.
+    this.minimap = this.add.graphics().setScrollFactor(0).setDepth(1500);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       if (this.leaveDebounce !== null) {
@@ -530,53 +531,123 @@ export class PlayScene extends Phaser.Scene {
     if (hit) (hit.body as Phaser.Physics.Arcade.Body).reset(x, y);
   }
 
-  private toggleOverlays(): void {
-    this.overlaysActive = !this.overlaysActive;
-    this.localCam?.setVisible(this.overlaysActive);
-    this.remoteCam?.setVisible(this.overlaysActive);
+
+  // 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었는지 감지해, 끼었으면 위로 탈출시킨다.
+  // 좌우 양쪽에서 눌린 공을 Arcade가 분리하려다 한쪽으로 순간이동시켜 '몸을 뚫는' 현상을
+  // 막는다 — 위로는 캐릭터가 못 막으므로 공을 위로 빼내는 게 가장 안정적이다.
+  private relieveSqueeze(): void {
+    const bx = this.ball.sprite.x;
+    const by = this.ball.sprite.y;
+    let leftPress = false; // 공의 왼쪽에서 누르는 몸이 있음
+    let rightPress = false; // 공의 오른쪽에서 누르는 몸이 있음
+
+    // 캐릭터 두 명 검사(세로로 겹치고 수평으로 맞닿을 만큼 가까울 때만).
+    for (const p of [this.player1, this.player2]) {
+      const dx = bx - p.sprite.x;
+      const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+      const hClose = Math.abs(dx) < PLAYER_WIDTH / 2 + BALL_RADIUS + 4;
+      if (!(vClose && hClose)) continue;
+      if (dx >= 0) leftPress = true; // 몸이 공보다 왼쪽 → 왼쪽에서 누름
+      else rightPress = true;
+    }
+
+    // 월드 좌우 벽에 바짝 붙은 것도 한쪽 압력으로 취급(벽↔캐릭터 사이 끼임 포함).
+    if (bx <= BALL_RADIUS + 2) leftPress = true;
+    if (bx >= WORLD_WIDTH - BALL_RADIUS - 2) rightPress = true;
+
+    if (leftPress && rightPress) {
+      // 덜 눌린 쪽으로 살짝 밀며 위로 탈출. 여기선 방향 편향 없이 위로만 빼도 충분.
+      this.ball.escapeUp(0);
+    }
   }
 
-  // 진단: 이번 프레임에 공이 플레이어의 한쪽에서 반대쪽으로 '넘어갔는데' 세로로 겹쳐
-  // 있었다면(=몸을 관통) 그 순간의 속도/위치를 로그로 남긴다.
-  private detectTunnel(): void {
+  // 스윕 관통 가드: 이번 프레임에 공이 플레이어 중심을 '가로질렀는데' 몸통 높이에서
+  // 겹쳐 있었다면(=몸을 통과) 원래 있던 쪽 바깥으로 되돌리고 그쪽으로 튕겨낸다.
+  // kick()의 방향이 깊은 관통 시 뒤집혀 공을 몸 반대편으로 쏘거나, 빠른 속도로
+  // 한 스텝에 몸을 지나치는 경우 등 '원인과 무관하게' 관통 자체를 잡는 안전망이다.
+  private preventPassThrough(): void {
     const bx = this.ball.sprite.x;
     const by = this.ball.sprite.y;
     if (!Number.isNaN(this.prevBallX)) {
-      for (const [i, p] of [this.player1, this.player2].entries()) {
+      for (const p of [this.player1, this.player2]) {
         const px = p.sprite.x;
-        const py = p.sprite.y;
-        const vClose = Math.abs(by - py) < PLAYER_HEIGHT / 2 + BALL_RADIUS;
-        const prevSide = Math.sign(this.prevBallX - px);
-        const curSide = Math.sign(bx - px);
-        if (vClose && prevSide !== 0 && curSide !== 0 && prevSide !== curSide) {
+        const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+        if (!vClose) continue;
+        const prev = this.prevBallX - px; // 직전 프레임 공의 좌우 오프셋
+        const cur = bx - px; // 현재 오프셋
+        // 부호가 반전됐고(중심 통과) 직전에 몸 안쪽까지 들어와 있었다면 관통으로 본다.
+        if (Math.sign(prev) !== 0 && Math.sign(prev) !== Math.sign(cur) && Math.abs(prev) > 4) {
+          const side = Math.sign(prev);
           const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[tunnel] P${i + 1} 관통! ballV=(${bb.velocity.x.toFixed(0)},${bb.velocity.y.toFixed(0)}) ` +
-              `dy=${(by - py).toFixed(0)} prevDx=${(this.prevBallX - px).toFixed(0)} curDx=${(bx - px).toFixed(0)}`
+          this.ball.sprite.x = px + side * (PLAYER_WIDTH / 2 + BALL_RADIUS + 1);
+          this.ball.sprite.setVelocityX(
+            side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED)
           );
+          break;
         }
       }
     }
     this.prevBallX = bx;
   }
 
-  update(_time: number, delta: number): void {
-    const now = performance.now();
+  // 미니맵을 매 프레임 다시 그린다: 배경 → 골대 → 현재 화면(뷰포트) 박스 →
+  // 공·두 캐릭터 도트(내 캐릭터는 흰 테두리로 강조). 화면 밖 캐릭터 위치를 한눈에.
+  private updateMinimap(): void {
+    const g = this.minimap;
+    g.clear();
 
-    // 실제 프레임레이트(EMA). delta는 직전 프레임 소요 ms.
-    this.fps = this.fps * 0.9 + (1000 / Math.max(delta, 1)) * 0.1;
-    let fpsLine = `FPS ${this.fps.toFixed(0)}`;
-    if (this.faceMask) {
-      fpsLine += `  얼굴 ${this.faceMask.lastInferenceMs.toFixed(0)}ms · 렌더 ${this.faceMask.lastRenderMs.toFixed(0)}ms`;
+    // 배경 + 테두리
+    g.fillStyle(0x0b1524, 0.8);
+    g.fillRect(MM_X, MM_Y, MM_WIDTH, MM_HEIGHT);
+    g.lineStyle(1, 0xffffff, 0.25);
+    g.strokeRect(MM_X, MM_Y, MM_WIDTH, MM_HEIGHT);
+
+    // 양 끝 골대(세로 짧은 막대)
+    const groundTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT) * MM_SCALE;
+    const goalTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT - GOAL_HEIGHT) * MM_SCALE;
+    g.lineStyle(2, 0xffffff, 0.5);
+    g.lineBetween(MM_X + 1, goalTopMap, MM_X + 1, groundTopMap);
+    g.lineBetween(MM_X + MM_WIDTH - 1, goalTopMap, MM_X + MM_WIDTH - 1, groundTopMap);
+
+    // 현재 화면(뷰포트) 박스
+    const cam = this.cameras.main;
+    g.lineStyle(1, 0xffd166, 0.9);
+    g.strokeRect(MM_X + cam.scrollX * MM_SCALE, MM_Y, GAME_WIDTH * MM_SCALE, MM_HEIGHT);
+
+    // 공
+    const mapX = (wx: number) => MM_X + wx * MM_SCALE;
+    const mapY = (wy: number) => MM_Y + wy * MM_SCALE;
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(mapX(this.ball.sprite.x), mapY(this.ball.sprite.y), 2.5);
+
+    // 두 캐릭터 도트(내 캐릭터는 흰 테두리로 강조)
+    const me = this.mode === "guest" ? this.player2 : this.player1;
+    for (const [p, color] of [
+      [this.player1, PLAYER_COLOR],
+      [this.player2, PLAYER2_COLOR],
+    ] as const) {
+      const px = mapX(p.sprite.x);
+      const py = mapY(p.sprite.y);
+      g.fillStyle(color, 1);
+      g.fillCircle(px, py, 3);
+      if (p === me) {
+        g.lineStyle(1.5, 0xffffff, 1);
+        g.strokeCircle(px, py, 4.5);
+      }
     }
-    this.fpsText.setText(fpsLine);
+  }
+
+  update(): void {
+    const now = performance.now();
 
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
 
-    // 진단: 실제 물리가 도는 host/local에서 공이 플레이어를 관통했는지 감지.
-    if (this.mode !== "guest") this.detectTunnel();
+    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출 + 스윕 관통 가드.
+    if (this.mode !== "guest") {
+      this.relieveSqueeze();
+      this.preventPassThrough();
+    }
 
     if (this.mode === "guest") {
       this.updateGuest(now);
@@ -588,11 +659,14 @@ export class PlayScene extends Phaser.Scene {
 
       if (this.mode === "host") this.maybeSendSnapshot(now);
 
+      // 시간제에서만 타이머를 표시하고 0에서 종료. 점수제는 상단 라벨('선취 N점') 고정.
       const remaining = this.remainingMs();
       this.lastKnownRemainingMs = remaining;
-      this.clockText.setText(this.formatClock(remaining));
-      if (remaining <= 0 && !this.matchEnded) {
-        this.endMatch();
+      if (this.matchMode === "time") {
+        this.clockText.setText(this.formatClock(remaining));
+        if (remaining <= 0 && !this.matchEnded) {
+          this.endMatch();
+        }
       }
     }
 
@@ -601,11 +675,7 @@ export class PlayScene extends Phaser.Scene {
     if (this.matchEnded) return;
 
     this.positionCameras();
-    this.updateStatus();
-
-    if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
-      this.ball.reset();
-    }
+    this.updateMinimap();
   }
 
   // 공이 골 영역에 들어오면 해당 스코어를 올리고 공을 중앙으로 리셋.
@@ -620,6 +690,16 @@ export class PlayScene extends Phaser.Scene {
     else this.scoreLeft++;
 
     this.updateScoreboard();
+
+    // 점수제: 한쪽이 목표 점수에 먼저 도달하면 즉시 종료(리셋/연출 없이 결과로).
+    if (
+      this.matchMode === "score" &&
+      (this.scoreLeft >= SCORE_TARGET || this.scoreRight >= SCORE_TARGET)
+    ) {
+      this.endMatch();
+      return;
+    }
+
     this.cameras.main.flash(200, 255, 255, 255);
     this.ball.reset();
     this.player1.reset();
@@ -671,10 +751,13 @@ export class PlayScene extends Phaser.Scene {
     if (this.matchEnded) return;
     // 시작 직후 설정 중의 일시적 presence 흔들림은 무시(오탐 방지).
     if (performance.now() - this.matchStartAt < 1500) return;
-    // 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가 채널을 떠나며
-    // presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮어쓰는 것을 막는다.
-    const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
-    if (remaining <= 3000) return;
+    // (시간제 한정) 정상 시간 종료 직전이면(≤3s) 이탈로 처리하지 않는다 — 종료 시 상대가
+    // 채널을 떠나며 presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮는 것 방지.
+    // 점수제는 남은 시간이 의미가 없으므로(90초 지나 0이 됨) 이 가드를 적용하지 않는다.
+    if (this.matchMode === "time") {
+      const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
+      if (remaining <= 3000) return;
+    }
 
     this.matchEnded = true;
     this.physics.world.pause();
@@ -765,7 +848,7 @@ export class PlayScene extends Phaser.Scene {
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
       this.lastKnownRemainingMs = s.clockMs;
-      this.clockText.setText(this.formatClock(s.clockMs));
+      if (this.matchMode === "time") this.clockText.setText(this.formatClock(s.clockMs));
       if (s.phase === "ended" && !this.matchEnded) {
         this.matchEnded = true;
         this.goToResult();
@@ -773,28 +856,4 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  private updateStatus(): void {
-    switch (this.motion.state) {
-      case "ready": {
-        const d = this.motion.debug;
-        this.statusText
-          .setText(
-            `모션 ON · ${this.motion.latencyMs.toFixed(0)}ms · ` +
-              `offsetX ${d.offsetX.toFixed(2)} riseY ${d.riseY.toFixed(2)}`
-          )
-          .setColor("#90ee90");
-        break;
-      }
-      case "loading":
-        this.statusText.setText("모션: 로딩 중... (키보드로 조작 가능)").setColor("#ffd166");
-        break;
-      case "error":
-        this.statusText
-          .setText(`모션 OFF: ${this.motion.error} · 키보드(← → ↑)로 조작`)
-          .setColor("#ff6b6b");
-        break;
-      default:
-        this.statusText.setText("모션: 초기화 중...").setColor("#ffd166");
-    }
-  }
 }

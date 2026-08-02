@@ -56,7 +56,9 @@ export function createSignalingServer(): http.Server {
       }
 
       if (m.t === "queue") {
-        queue.enqueue(peer);
+        // 경기 방식별로 큐를 분리(같은 방식끼리만 매칭). 값이 없으면 시간제로.
+        const mode = typeof m.mode === "string" ? m.mode : "time";
+        queue.enqueue(peer, mode);
         return;
       }
 

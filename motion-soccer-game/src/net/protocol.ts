@@ -41,6 +41,7 @@ export interface MatchEvent {
   scoreL?: number;
   scoreR?: number;
   winner?: "left" | "right" | "draw";
+  mode?: "time" | "score"; // matchStart에 실려 host가 고른 경기 방식을 guest에 전달
 }
 
 // Supabase broadcast event 이름
@@ -97,6 +98,7 @@ export function isMatchEvent(v: unknown): v is MatchEvent {
     (MATCH_KINDS as readonly string[]).includes(v.kind) &&
     (v.scoreL === undefined || isNum(v.scoreL)) &&
     (v.scoreR === undefined || isNum(v.scoreR)) &&
-    (v.winner === undefined || (MATCH_WINNERS as readonly unknown[]).includes(v.winner))
+    (v.winner === undefined || (MATCH_WINNERS as readonly unknown[]).includes(v.winner)) &&
+    (v.mode === undefined || v.mode === "time" || v.mode === "score")
   );
 }

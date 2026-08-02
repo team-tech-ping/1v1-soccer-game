@@ -4,6 +4,7 @@ import { createSupabaseChannel } from "../../net/SupabaseChannel";
 import { RoomSession, type Role } from "../../net/RoomSession";
 import { MatchmakingClient } from "../../webrtc/MatchmakingClient";
 import { ANIMAL_MASKS, DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
+import type { MatchMode } from "../../config";
 
 // 시작 화면: 방 만들기(host) / 코드 입장(guest). 명세 5.1.
 // 캔버스 위에 '중앙 정렬 카드' 하나(DOM)를 올려 레이아웃을 flexbox로 처리한다.
@@ -86,6 +87,7 @@ export class HomeScene extends Phaser.Scene {
   private matchmaker: MatchmakingClient | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
+  private matchMode: MatchMode = "time"; // 방 생성/매칭 시 host로서 고르는 경기 방식
 
   constructor() {
     super("Home");
@@ -150,6 +152,35 @@ export class HomeScene extends Phaser.Scene {
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
   }
 
+  // 경기 방식 선택 화면(방 만들기·빠른 매칭 공용). 고르면 onPick(mode)을 호출한다.
+  private renderModeSelect(subtitle: string, onPick: (mode: MatchMode) => void): void {
+    const card = this.mountCard();
+    card.appendChild(this.el("h1", "msg-home-title", "경기 방식 선택"));
+    card.appendChild(this.el("p", "msg-home-sub", subtitle));
+
+    const timeBtn = this.el("button", "msg-home-btn msg-home-primary", "⏱ 시간제 · 90초") as HTMLButtonElement;
+    timeBtn.style.marginBottom = "8px";
+    timeBtn.onclick = () => onPick("time");
+    card.appendChild(timeBtn);
+
+    const scoreBtn = this.el("button", "msg-home-btn msg-home-primary", "🥅 점수제 · 선취 5점") as HTMLButtonElement;
+    scoreBtn.onclick = () => onPick("score");
+    card.appendChild(scoreBtn);
+
+    const backBtn = this.el("button", "msg-home-btn msg-home-ghost", "← 뒤로") as HTMLButtonElement;
+    backBtn.style.marginTop = "16px";
+    backBtn.onclick = () => this.renderLobby();
+    card.appendChild(backBtn);
+  }
+
+  // 고른 방식으로 방 코드를 만들고 host로 입장(대기 화면).
+  private createRoom(mode: MatchMode): void {
+    this.matchMode = mode;
+    const code = generateRoomCode();
+    this.renderWaiting("방이 열렸어요", code, "상대 입장을 기다리는 중…");
+    void this.enterRoom(code, "host");
+  }
+
   // 상대에게 보이는 내 얼굴을 동물 마스크로 가리는 필터 ON/OFF + 종류 선택.
   // 경기 전에만 바꿀 수 있고, 경기 중에는 고정된다(PlayScene에 값만 전달).
   private buildFilterControls(): HTMLElement {
@@ -200,7 +231,13 @@ export class HomeScene extends Phaser.Scene {
     card.appendChild(cancelBtn);
   }
 
+  // 빠른 매칭 → 방식 선택 → 같은 방식 큐로 매칭.
   private onQuickMatch(): void {
+    this.renderModeSelect("선택한 방식끼리 매칭됩니다", (mode) => this.startQuickMatch(mode));
+  }
+
+  private startQuickMatch(mode: MatchMode): void {
+    this.matchMode = mode;
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
       this.renderLobby("매칭 서버(VITE_SIGNAL_URL)가 설정되지 않았습니다");
@@ -210,7 +247,7 @@ export class HomeScene extends Phaser.Scene {
     const mm = new MatchmakingClient(url);
     this.matchmaker = mm;
     mm
-      .start((result) => {
+      .start(mode, (result) => {
         mm.cancel(); // 매칭 완료 → 매칭 소켓 정리
         this.matchmaker = null;
         this.renderWaiting("매칭 완료!", result.code, "연결하는 중…");
@@ -252,9 +289,7 @@ export class HomeScene extends Phaser.Scene {
   }
 
   private onCreate(): void {
-    const code = generateRoomCode();
-    this.renderWaiting("방이 열렸어요", code, "상대 입장을 기다리는 중…");
-    void this.enterRoom(code, "host");
+    this.renderModeSelect("선택하면 방이 만들어집니다", (mode) => this.createRoom(mode));
   }
 
   private onJoin(raw: string): void {
@@ -270,13 +305,14 @@ export class HomeScene extends Phaser.Scene {
   private async enterRoom(code: string, role: Role): Promise<void> {
     try {
       const channel = createSupabaseChannel(code);
-      const session = new RoomSession(channel, role);
+      const session = new RoomSession(channel, role, this.matchMode);
       session.onReady(() => {
         this.scene.start("Play", {
           session,
           roomCode: code,
           filterEnabled: this.filterEnabled,
           animalId: this.animalId,
+          matchMode: session.mode, // host=자신 선택, guest=host로부터 수신
         });
       });
       await session.start();

@@ -12,6 +12,7 @@ import {
   BALL_MAX_VELOCITY_Y,
   BALL_STOMP_SPEED,
   BALL_STOMP_LIFT,
+  BALL_SQUEEZE_ESCAPE_LIFT,
   HEAD_POWER_SCALE,
   PLAYER_WIDTH,
 } from "../../config";
@@ -86,6 +87,13 @@ export class Ball {
     this.sprite.setPosition(playerX + dir * escapeGap, this.sprite.y);
     this.sprite.setVelocityX(dir * BALL_STOMP_SPEED);
     this.sprite.setVelocityY(-BALL_STOMP_LIFT);
+  }
+
+  // 두 몸 사이에 낀 공을 위로 탈출시킨다(끼임 상태가 풀릴 때까지 매 프레임 호출).
+  // 좌우 분리 경합으로 공이 한쪽으로 순간이동해 몸을 뚫는 것을 막는다.
+  // toward: 탈출 시 살짝 밀 수평 방향(-1 왼쪽, 1 오른쪽, 0 없음).
+  escapeUp(toward: number): void {
+    this.sprite.setVelocity(toward * 80, -BALL_SQUEEZE_ESCAPE_LIFT);
   }
 
   // 접촉 중 재발동 방지 쿨다운. 통과하면 true를 반환하며 타이머를 갱신한다.

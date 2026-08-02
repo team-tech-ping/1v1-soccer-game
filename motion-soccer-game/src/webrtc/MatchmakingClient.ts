@@ -1,5 +1,6 @@
 // 랜덤(빠른) 매칭 클라이언트. Railway 서버의 매칭 큐에 진입한다.
 // 매칭되면 서버가 발급한 방 코드/역할을 받아, 이후 기존 입장 플로우를 그대로 탄다.
+import type { MatchMode } from "../config";
 
 export type MatchRole = "host" | "guest";
 
@@ -14,13 +15,14 @@ export class MatchmakingClient {
   constructor(private readonly url: string) {}
 
   // 큐 진입. 연결되면 resolve(대기 시작), 매칭되면 onMatched 호출.
-  start(onMatched: (result: MatchResult) => void): Promise<void> {
+  // mode별로 서버 큐가 분리되어 같은 방식끼리만 매칭된다.
+  start(mode: MatchMode, onMatched: (result: MatchResult) => void): Promise<void> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.url);
       this.ws = ws;
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ t: "queue" }));
+        ws.send(JSON.stringify({ t: "queue", mode }));
         resolve();
       };
       ws.onerror = () => reject(new Error("매칭 서버 연결 실패"));
