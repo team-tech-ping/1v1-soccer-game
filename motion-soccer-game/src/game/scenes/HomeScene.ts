@@ -80,16 +80,6 @@ const CSS = `
   background: #0b1524; color: #e0e1dd; font-size: 13px;
 }
 .msg-home-filter select:disabled { opacity: 0.4; }
-.msg-home-mode {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  margin: 18px 0 4px; font-size: 13px; color: #b8c4d9;
-}
-.msg-home-modebtns { display: flex; gap: 6px; }
-.msg-home-modebtn {
-  padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.18);
-  background: transparent; color: #e0e1dd; font-size: 12px; cursor: pointer;
-}
-.msg-home-modebtn.on { background: #4cc9f0; color: #08111f; border-color: #4cc9f0; font-weight: 700; }
 `;
 
 export class HomeScene extends Phaser.Scene {
@@ -157,37 +147,38 @@ export class HomeScene extends Phaser.Scene {
     row.appendChild(joinBtn);
     card.appendChild(row);
 
-    card.appendChild(this.buildModeControls());
     card.appendChild(this.buildFilterControls());
 
     if (errorMsg) card.appendChild(this.el("div", "msg-home-error", errorMsg));
   }
 
-  // 경기 방식 선택(방 만들기·빠른 매칭에서 host가 될 때 적용). 시간제/점수제 토글.
-  private buildModeControls(): HTMLElement {
-    const row = this.el("div", "msg-home-mode");
-    row.appendChild(this.el("span", "", "경기 방식"));
+  // 방 만들기 → 경기 방식 선택 화면. 방식을 고르면 그 방식으로 방이 만들어진다.
+  private renderModeSelect(): void {
+    const card = this.mountCard();
+    card.appendChild(this.el("h1", "msg-home-title", "경기 방식 선택"));
+    card.appendChild(this.el("p", "msg-home-sub", "선택하면 방이 만들어집니다"));
 
-    const btns = this.el("div", "msg-home-modebtns");
-    const timeBtn = this.el("button", "msg-home-modebtn", "시간제 90초") as HTMLButtonElement;
-    const scoreBtn = this.el("button", "msg-home-modebtn", "점수제 5점") as HTMLButtonElement;
-    const refresh = () => {
-      timeBtn.classList.toggle("on", this.matchMode === "time");
-      scoreBtn.classList.toggle("on", this.matchMode === "score");
-    };
-    timeBtn.onclick = () => {
-      this.matchMode = "time";
-      refresh();
-    };
-    scoreBtn.onclick = () => {
-      this.matchMode = "score";
-      refresh();
-    };
-    refresh();
-    btns.appendChild(timeBtn);
-    btns.appendChild(scoreBtn);
-    row.appendChild(btns);
-    return row;
+    const timeBtn = this.el("button", "msg-home-btn msg-home-primary", "⏱ 시간제 · 90초") as HTMLButtonElement;
+    timeBtn.style.marginBottom = "8px";
+    timeBtn.onclick = () => this.createRoom("time");
+    card.appendChild(timeBtn);
+
+    const scoreBtn = this.el("button", "msg-home-btn msg-home-primary", "🥅 점수제 · 선취 5점") as HTMLButtonElement;
+    scoreBtn.onclick = () => this.createRoom("score");
+    card.appendChild(scoreBtn);
+
+    const backBtn = this.el("button", "msg-home-btn msg-home-ghost", "← 뒤로") as HTMLButtonElement;
+    backBtn.style.marginTop = "16px";
+    backBtn.onclick = () => this.renderLobby();
+    card.appendChild(backBtn);
+  }
+
+  // 고른 방식으로 방 코드를 만들고 host로 입장(대기 화면).
+  private createRoom(mode: MatchMode): void {
+    this.matchMode = mode;
+    const code = generateRoomCode();
+    this.renderWaiting("방이 열렸어요", code, "상대 입장을 기다리는 중…");
+    void this.enterRoom(code, "host");
   }
 
   // 상대에게 보이는 내 얼굴을 동물 마스크로 가리는 필터 ON/OFF + 종류 선택.
@@ -292,9 +283,7 @@ export class HomeScene extends Phaser.Scene {
   }
 
   private onCreate(): void {
-    const code = generateRoomCode();
-    this.renderWaiting("방이 열렸어요", code, "상대 입장을 기다리는 중…");
-    void this.enterRoom(code, "host");
+    this.renderModeSelect();
   }
 
   private onJoin(raw: string): void {
