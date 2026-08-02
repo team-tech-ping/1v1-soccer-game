@@ -62,13 +62,9 @@ export class PlayScene extends Phaser.Scene {
   private player2!: Player;
   private goals: Goal[] = [];
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private resetKey!: Phaser.Input.Keyboard.Key;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
 
   private motion = new MotionController();
-  private statusText!: Phaser.GameObjects.Text;
-  private fpsText!: Phaser.GameObjects.Text;
-  private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
   // 미니맵(전체 필드 축소도) — 매 프레임 다시 그린다. 화면에 고정.
   private minimap!: Phaser.GameObjects.Graphics;
@@ -100,7 +96,6 @@ export class PlayScene extends Phaser.Scene {
   private cameraShare: CameraShare | null = null;
   private localCam: Phaser.GameObjects.Video | null = null;
   private remoteCam: Phaser.GameObjects.Video | null = null;
-  private overlaysActive = true;
   private faceMask: FaceMaskPipeline | null = null;
   private filterEnabled = false;
   private animalId = DEFAULT_ANIMAL_ID;
@@ -148,7 +143,6 @@ export class PlayScene extends Phaser.Scene {
     this.cameraShare = null;
     this.localCam = null;
     this.remoteCam = null;
-    this.overlaysActive = true;
     this.faceMask = null;
     this.filterToggleText = null;
     this.filterBusy = false;
@@ -212,34 +206,25 @@ export class PlayScene extends Phaser.Scene {
     cam.startFollow(this.ball.sprite, true, 0.1, 0.1);
     cam.setDeadzone(GAME_WIDTH * 0.5, GAME_HEIGHT);
 
-    // 키보드: 폴백 이동 + 공 리셋(R) + 캘리브레이션(C)
+    // 키보드: 폴백 이동 + 캘리브레이션(C)
     const keyboard = this.input.keyboard!;
     this.cursors = keyboard.createCursorKeys();
-    this.resetKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C).on("down", () => {
       this.motion.calibrate();
     });
     this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
-    // 진단용: V 키로 카메라 오버레이 On/Off (디코드/합성 비용 격리)
-    keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.V).on("down", () => this.toggleOverlays());
 
-    // HUD: 카메라에 고정(스크롤 무시).
-    this.statusText = this.add
-      .text(24, 20, "모션: 초기화 중...", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#ffd166",
-      })
-      .setScrollFactor(0);
-
-    // 진단용 FPS 미터 — 실제 렌더 루프 프레임레이트를 표시.
-    this.fpsText = this.add
-      .text(24, 42, "FPS --", {
-        fontFamily: "monospace",
+    // 좌상단 안내: C 키로 얼굴 정면을 다시 맞출 수 있음.
+    this.add
+      .text(24, 20, "C : 얼굴 정면 다시 맞추기", {
+        fontFamily: "sans-serif",
         fontSize: "14px",
-        color: "#90e0ef",
+        color: "#e0e1dd",
+        backgroundColor: "#00000099",
+        padding: { x: 8, y: 4 },
       })
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(1500);
 
     this.scoreText = this.add
       .text(GAME_WIDTH / 2, 14, "", {
@@ -294,15 +279,6 @@ export class PlayScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true })
         .on("pointerdown", () => void this.toggleFilter());
     }
-
-    this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 26, "C: 정면 보정 · R: 공 리셋", {
-        fontFamily: "sans-serif",
-        fontSize: "14px",
-        color: "#778da9",
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0);
 
     // 미니맵: 전체 필드 축소도. 공에 붙어 스크롤되는 카메라 때문에 화면 밖으로 나간
     // 내 캐릭터 위치를 놓치지 않게 돕는다. 매 프레임 updateMinimap()에서 다시 그린다.
@@ -544,11 +520,6 @@ export class PlayScene extends Phaser.Scene {
     if (hit) (hit.body as Phaser.Physics.Arcade.Body).reset(x, y);
   }
 
-  private toggleOverlays(): void {
-    this.overlaysActive = !this.overlaysActive;
-    this.localCam?.setVisible(this.overlaysActive);
-    this.remoteCam?.setVisible(this.overlaysActive);
-  }
 
   // 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었는지 감지해, 끼었으면 위로 탈출시킨다.
   // 좌우 양쪽에서 눌린 공을 Arcade가 분리하려다 한쪽으로 순간이동시켜 '몸을 뚫는' 현상을
@@ -626,16 +597,8 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  update(_time: number, delta: number): void {
+  update(): void {
     const now = performance.now();
-
-    // 실제 프레임레이트(EMA). delta는 직전 프레임 소요 ms.
-    this.fps = this.fps * 0.9 + (1000 / Math.max(delta, 1)) * 0.1;
-    let fpsLine = `FPS ${this.fps.toFixed(0)}`;
-    if (this.faceMask) {
-      fpsLine += `  얼굴 ${this.faceMask.lastInferenceMs.toFixed(0)}ms · 렌더 ${this.faceMask.lastRenderMs.toFixed(0)}ms`;
-    }
-    this.fpsText.setText(fpsLine);
 
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
@@ -667,11 +630,6 @@ export class PlayScene extends Phaser.Scene {
 
     this.positionCameras();
     this.updateMinimap();
-    this.updateStatus();
-
-    if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
-      this.ball.reset();
-    }
   }
 
   // 공이 골 영역에 들어오면 해당 스코어를 올리고 공을 중앙으로 리셋.
@@ -839,28 +797,4 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  private updateStatus(): void {
-    switch (this.motion.state) {
-      case "ready": {
-        const d = this.motion.debug;
-        this.statusText
-          .setText(
-            `모션 ON · ${this.motion.latencyMs.toFixed(0)}ms · ` +
-              `offsetX ${d.offsetX.toFixed(2)} riseY ${d.riseY.toFixed(2)}`
-          )
-          .setColor("#90ee90");
-        break;
-      }
-      case "loading":
-        this.statusText.setText("모션: 로딩 중... (키보드로 조작 가능)").setColor("#ffd166");
-        break;
-      case "error":
-        this.statusText
-          .setText(`모션 OFF: ${this.motion.error} · 키보드(← → ↑)로 조작`)
-          .setColor("#ff6b6b");
-        break;
-      default:
-        this.statusText.setText("모션: 초기화 중...").setColor("#ffd166");
-    }
-  }
 }
