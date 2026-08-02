@@ -37,15 +37,23 @@ export class AnimalMaskRenderer {
       1,
       10000,
     );
+
+    // GLB 마스크(강아지/잭오랜턴/모아이)는 pbrMetallicRoughness 재질이라 조명이 없으면
+    // 검게 렌더링된다(MeshBasicMaterial 절차적 마스크는 조명을 무시해 영향 없음).
+    this.scene.add(new THREE.AmbientLight(0xffffff, 2.2));
+    const key = new THREE.DirectionalLight(0xffffff, 1.2);
+    key.position.set(0, 1, 1);
+    this.scene.add(key);
   }
 
-  setAnimal(id: string): void {
+  async setAnimal(id: string): Promise<void> {
+    const visual = await buildAnimalMask(id);
+    visual.scale.setScalar(MASK_SCALE);
+
     if (this.trackedGroup) {
       this.scene.remove(this.trackedGroup);
       disposeMaskGroup(this.trackedGroup);
     }
-    const visual = buildAnimalMask(id);
-    visual.scale.setScalar(MASK_SCALE);
 
     const tracked = new THREE.Group();
     tracked.matrixAutoUpdate = false;

@@ -23,6 +23,8 @@ export const PLAYER_COLOR = 0x4cc9f0;
 export const PLAYER2_COLOR = 0xff6b6b; // 오른쪽(guest) 플레이어 색
 export const PLAYER_SPEED = 440; // 좌우 이동 속도(px/s)
 export const PLAYER_JUMP_VELOCITY = -650; // 점프 초기 속도(px/s, 위쪽이 음수)
+// 유니폼 스프라이트 표시 높이(px). 히트박스(PLAYER_WIDTH/HEIGHT)와는 무관한 순수 비주얼 크기.
+export const PLAYER_SPRITE_HEIGHT = 110;
 
 // 공
 export const BALL_RADIUS = 22;

@@ -7,6 +7,7 @@ import {
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_COLOR,
+  PLAYER_COLOR,
   PLAYER2_COLOR,
   GOAL_HEIGHT,
   GOAL_COOLDOWN_MS,
@@ -20,7 +21,7 @@ import {
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
-import { Player } from "../entities/Player";
+import { Player, HOST_TEXTURES, GUEST_TEXTURES } from "../entities/Player";
 import { Goal, type GoalSide } from "../entities/Goal";
 import { createEmptyInputState, type InputState } from "../../input/InputState";
 import { MotionController } from "../../motion/MotionController";
@@ -170,8 +171,20 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, groundTop);
 
     this.field = new Field(this);
-    this.player1 = new Player(this, WORLD_WIDTH * 0.5 - 120, groundTop - PLAYER_HEIGHT);
-    this.player2 = new Player(this, WORLD_WIDTH * 0.5 + 120, groundTop - PLAYER_HEIGHT, PLAYER2_COLOR);
+    this.player1 = new Player(
+      this,
+      WORLD_WIDTH * 0.5 - 120,
+      groundTop - PLAYER_HEIGHT,
+      PLAYER_COLOR,
+      HOST_TEXTURES,
+    );
+    this.player2 = new Player(
+      this,
+      WORLD_WIDTH * 0.5 + 120,
+      groundTop - PLAYER_HEIGHT,
+      PLAYER2_COLOR,
+      GUEST_TEXTURES,
+    );
     this.ball = new Ball(this, WORLD_WIDTH * 0.5, groundTop - 200);
 
     // 양 끝 골대
@@ -189,7 +202,8 @@ export class PlayScene extends Phaser.Scene {
         // 신뢰할 수 없다. 기하학적으로 '발밑 근처·아래'인지 직접 확인한다.)
         const dx = Math.abs(this.ball.sprite.x - p.sprite.x);
         const dy = this.ball.sprite.y - p.sprite.y; // 양수: 공이 플레이어보다 아래(발밑)
-        const standingOnBall = dy > PLAYER_HEIGHT * 0.25 && dx < PLAYER_WIDTH * 0.4;
+        const standingOnBall =
+          dy > PLAYER_HEIGHT * 0.25 && dx < PLAYER_WIDTH * 0.4;
         if (standingOnBall) {
           this.ball.stomp(p.sprite.x);
         } else {
@@ -205,7 +219,9 @@ export class PlayScene extends Phaser.Scene {
 
     // 공이 골 영역에 들어오면 득점
     for (const goal of this.goals) {
-      this.physics.add.overlap(this.ball.sprite, goal.zone, () => this.onGoal(goal.side));
+      this.physics.add.overlap(this.ball.sprite, goal.zone, () =>
+        this.onGoal(goal.side),
+      );
     }
 
     // 카메라: 공을 따라가되 데드존 안에서는 고정 → 공이 가장자리로 가면 스크롤.
@@ -220,7 +236,10 @@ export class PlayScene extends Phaser.Scene {
     keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C).on("down", () => {
       this.motion.calibrate();
     });
-    this.wasd = keyboard.addKeys("W,A,D") as Record<string, Phaser.Input.Keyboard.Key>;
+    this.wasd = keyboard.addKeys("W,A,D") as Record<
+      string,
+      Phaser.Input.Keyboard.Key
+    >;
 
     // 좌상단 안내: C 키로 얼굴 정면을 다시 맞출 수 있음.
     this.add
@@ -247,7 +266,9 @@ export class PlayScene extends Phaser.Scene {
 
     // 시간제는 남은 시간, 점수제는 목표 점수를 상단에 표시.
     const clockInit =
-      this.matchMode === "score" ? `선취 ${SCORE_TARGET}점` : this.formatClock(MATCH_DURATION_MS);
+      this.matchMode === "score"
+        ? `선취 ${SCORE_TARGET}점`
+        : this.formatClock(MATCH_DURATION_MS);
     this.clockText = this.add
       .text(GAME_WIDTH / 2, 52, clockInit, {
         fontFamily: "monospace",
@@ -305,8 +326,16 @@ export class PlayScene extends Phaser.Scene {
       this.cameraShare?.stop();
       this.signaling?.close();
       // Phaser Video는 씬 종료 시 자동 파괴됨(별도 DOM 없음). 마스크 그래픽만 명시적으로 정리.
-      (this.localCam?.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.destroy();
-      (this.remoteCam?.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.destroy();
+      (
+        this.localCam?.getData("mask") as
+          | Phaser.GameObjects.Graphics
+          | undefined
+      )?.destroy();
+      (
+        this.remoteCam?.getData("mask") as
+          | Phaser.GameObjects.Graphics
+          | undefined
+      )?.destroy();
       if (this.session) void this.session.channel.leave();
     });
 
@@ -375,7 +404,10 @@ export class PlayScene extends Phaser.Scene {
       this.faceMask = pipeline;
       this.startCameraShare(pipeline.outputStream);
     } catch (e) {
-      console.warn("[face-mask] 초기화 실패 — 원본 얼굴 노출 방지를 위해 카메라 공유를 건너뜁니다", e);
+      console.warn(
+        "[face-mask] 초기화 실패 — 원본 얼굴 노출 방지를 위해 카메라 공유를 건너뜁니다",
+        e,
+      );
     }
   }
 
@@ -393,7 +425,9 @@ export class PlayScene extends Phaser.Scene {
 
     const url = import.meta.env.VITE_SIGNAL_URL;
     if (!url) {
-      console.warn("[camera-share] VITE_SIGNAL_URL 미설정 — 상대 카메라 공유 비활성");
+      console.warn(
+        "[camera-share] VITE_SIGNAL_URL 미설정 — 상대 카메라 공유 비활성",
+      );
       return;
     }
 
@@ -464,7 +498,7 @@ export class PlayScene extends Phaser.Scene {
   private addCamVideo(
     stream: MediaStream,
     mirror: boolean,
-    owner: Player
+    owner: Player,
   ): Phaser.GameObjects.Video {
     const D = CAM_DIAMETER; // 원 지름 — 나/상대 동일(보이는 원 크기가 곧 D라 항상 같다)
     const v = this.add.video(0, 0).setDepth(50).setOrigin(0.5);
@@ -525,12 +559,13 @@ export class PlayScene extends Phaser.Scene {
     const y = owner.sprite.y - dy;
     cam.setPosition(x, y);
     // 원형 마스크도 같은 위치로(안 그러면 마스크가 안 따라와 잘림).
-    (cam.getData("mask") as Phaser.GameObjects.Graphics | undefined)?.setPosition(x, y);
+    (
+      cam.getData("mask") as Phaser.GameObjects.Graphics | undefined
+    )?.setPosition(x, y);
     // 히트박스도 머리 위치로(속도 0으로 고정). 공이 이 원에 부딪히면 위 collider가 헤딩 처리.
     const hit = cam.getData("hit") as Phaser.GameObjects.Arc | undefined;
     if (hit) (hit.body as Phaser.Physics.Arcade.Body).reset(x, y);
   }
-
 
   // 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었는지 감지해, 끼었으면 위로 탈출시킨다.
   // 좌우 양쪽에서 눌린 공을 Arcade가 분리하려다 한쪽으로 순간이동시켜 '몸을 뚫는' 현상을
@@ -544,10 +579,12 @@ export class PlayScene extends Phaser.Scene {
     // 캐릭터 두 명 검사(세로로 겹치고 수평으로 맞닿을 만큼 가까울 때만).
     for (const p of [this.player1, this.player2]) {
       const dx = bx - p.sprite.x;
-      const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+      const vClose =
+        Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
       const hClose = Math.abs(dx) < PLAYER_WIDTH / 2 + BALL_RADIUS + 4;
       if (!(vClose && hClose)) continue;
-      if (dx >= 0) leftPress = true; // 몸이 공보다 왼쪽 → 왼쪽에서 누름
+      if (dx >= 0)
+        leftPress = true; // 몸이 공보다 왼쪽 → 왼쪽에서 누름
       else rightPress = true;
     }
 
@@ -571,17 +608,22 @@ export class PlayScene extends Phaser.Scene {
     if (!Number.isNaN(this.prevBallX)) {
       for (const p of [this.player1, this.player2]) {
         const px = p.sprite.x;
-        const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+        const vClose =
+          Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
         if (!vClose) continue;
         const prev = this.prevBallX - px; // 직전 프레임 공의 좌우 오프셋
         const cur = bx - px; // 현재 오프셋
         // 부호가 반전됐고(중심 통과) 직전에 몸 안쪽까지 들어와 있었다면 관통으로 본다.
-        if (Math.sign(prev) !== 0 && Math.sign(prev) !== Math.sign(cur) && Math.abs(prev) > 4) {
+        if (
+          Math.sign(prev) !== 0 &&
+          Math.sign(prev) !== Math.sign(cur) &&
+          Math.abs(prev) > 4
+        ) {
           const side = Math.sign(prev);
           const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
           this.ball.sprite.x = px + side * (PLAYER_WIDTH / 2 + BALL_RADIUS + 1);
           this.ball.sprite.setVelocityX(
-            side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED)
+            side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED),
           );
           break;
         }
@@ -604,15 +646,26 @@ export class PlayScene extends Phaser.Scene {
 
     // 양 끝 골대(세로 짧은 막대)
     const groundTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT) * MM_SCALE;
-    const goalTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT - GOAL_HEIGHT) * MM_SCALE;
+    const goalTopMap =
+      MM_Y + (GAME_HEIGHT - GROUND_HEIGHT - GOAL_HEIGHT) * MM_SCALE;
     g.lineStyle(2, 0xffffff, 0.5);
     g.lineBetween(MM_X + 1, goalTopMap, MM_X + 1, groundTopMap);
-    g.lineBetween(MM_X + MM_WIDTH - 1, goalTopMap, MM_X + MM_WIDTH - 1, groundTopMap);
+    g.lineBetween(
+      MM_X + MM_WIDTH - 1,
+      goalTopMap,
+      MM_X + MM_WIDTH - 1,
+      groundTopMap,
+    );
 
     // 현재 화면(뷰포트) 박스
     const cam = this.cameras.main;
     g.lineStyle(1, 0xffd166, 0.9);
-    g.strokeRect(MM_X + cam.scrollX * MM_SCALE, MM_Y, GAME_WIDTH * MM_SCALE, MM_HEIGHT);
+    g.strokeRect(
+      MM_X + cam.scrollX * MM_SCALE,
+      MM_Y,
+      GAME_WIDTH * MM_SCALE,
+      MM_HEIGHT,
+    );
 
     // 공
     const mapX = (wx: number) => MM_X + wx * MM_SCALE;
@@ -715,7 +768,10 @@ export class PlayScene extends Phaser.Scene {
   // 남은 경기 시간(ms). host/local이 실시간으로 계산하는 권위 값이다.
   // matchStartAt과 동일하게 performance.now() 기준(this.time.now는 씬 비활성 중 얼어붙음).
   private remainingMs(): number {
-    return Math.max(0, MATCH_DURATION_MS - (performance.now() - this.matchStartAt));
+    return Math.max(
+      0,
+      MATCH_DURATION_MS - (performance.now() - this.matchStartAt),
+    );
   }
 
   private formatClock(ms: number): string {
@@ -733,7 +789,10 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.pause();
     if (this.mode === "host" && this.session) {
       const w = this.readWorld();
-      this.session.channel.send(EV_SNAPSHOT, buildSnapshot(w, performance.now()));
+      this.session.channel.send(
+        EV_SNAPSHOT,
+        buildSnapshot(w, performance.now()),
+      );
     }
     this.goToResult();
   }
@@ -755,7 +814,8 @@ export class PlayScene extends Phaser.Scene {
     // 채널을 떠나며 presence가 떨어지는 것과 '이탈 승리'가 경합해 정상 결과를 덮는 것 방지.
     // 점수제는 남은 시간이 의미가 없으므로(90초 지나 0이 됨) 이 가드를 적용하지 않는다.
     if (this.matchMode === "time") {
-      const remaining = this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
+      const remaining =
+        this.mode === "guest" ? this.lastKnownRemainingMs : this.remainingMs();
       if (remaining <= 3000) return;
     }
 
@@ -817,9 +877,26 @@ export class PlayScene extends Phaser.Scene {
     const b2 = this.player2.sprite.body as Phaser.Physics.Arcade.Body;
     const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
     return {
-      p1: { x: this.player1.sprite.x, y: this.player1.sprite.y, vx: b1.velocity.x, vy: b1.velocity.y, facing: this.player1.facing },
-      p2: { x: this.player2.sprite.x, y: this.player2.sprite.y, vx: b2.velocity.x, vy: b2.velocity.y, facing: this.player2.facing },
-      ball: { x: this.ball.sprite.x, y: this.ball.sprite.y, vx: bb.velocity.x, vy: bb.velocity.y },
+      p1: {
+        x: this.player1.sprite.x,
+        y: this.player1.sprite.y,
+        vx: b1.velocity.x,
+        vy: b1.velocity.y,
+        facing: this.player1.facing,
+      },
+      p2: {
+        x: this.player2.sprite.x,
+        y: this.player2.sprite.y,
+        vx: b2.velocity.x,
+        vy: b2.velocity.y,
+        facing: this.player2.facing,
+      },
+      ball: {
+        x: this.ball.sprite.x,
+        y: this.ball.sprite.y,
+        vx: bb.velocity.x,
+        vy: bb.velocity.y,
+      },
       scoreL: this.scoreLeft,
       scoreR: this.scoreRight,
       clockMs: this.remainingMs(),
@@ -834,7 +911,10 @@ export class PlayScene extends Phaser.Scene {
     if (now - this.lastInputSentAt >= interval) {
       this.lastInputSentAt = now;
       const input = this.resolveInput(now);
-      this.session!.channel.send(EV_INPUT, inputToMessage(input, this.inputSeq++));
+      this.session!.channel.send(
+        EV_INPUT,
+        inputToMessage(input, this.inputSeq++),
+      );
     }
 
     // 보간 렌더(과거 시점)
@@ -848,12 +928,12 @@ export class PlayScene extends Phaser.Scene {
       this.scoreRight = s.scoreR;
       this.updateScoreboard();
       this.lastKnownRemainingMs = s.clockMs;
-      if (this.matchMode === "time") this.clockText.setText(this.formatClock(s.clockMs));
+      if (this.matchMode === "time")
+        this.clockText.setText(this.formatClock(s.clockMs));
       if (s.phase === "ended" && !this.matchEnded) {
         this.matchEnded = true;
         this.goToResult();
       }
     }
   }
-
 }

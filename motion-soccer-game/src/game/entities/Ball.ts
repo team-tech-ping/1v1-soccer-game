@@ -1,7 +1,6 @@
 import Phaser from "phaser";
 import {
   BALL_RADIUS,
-  BALL_COLOR,
   BALL_BOUNCE,
   BALL_DRAG_X,
   BALL_MASS,
@@ -17,7 +16,7 @@ import {
   PLAYER_WIDTH,
 } from "../../config";
 
-const BALL_TEXTURE = "ball";
+const BALL_TEXTURE = "soccer-ball";
 
 // 공: 원형 물리 바디. 캐릭터·벽과 충돌해 튀고 굴러간다.
 export class Ball {
@@ -30,19 +29,14 @@ export class Ball {
     this.startX = x;
     this.startY = y;
 
-    if (!scene.textures.exists(BALL_TEXTURE)) {
-      const d = BALL_RADIUS * 2;
-      const g = scene.make.graphics({ x: 0, y: 0 }, false);
-      g.fillStyle(BALL_COLOR, 1);
-      g.fillCircle(BALL_RADIUS, BALL_RADIUS, BALL_RADIUS);
-      g.lineStyle(3, 0x1d3557, 1);
-      g.strokeCircle(BALL_RADIUS, BALL_RADIUS, BALL_RADIUS - 1);
-      g.generateTexture(BALL_TEXTURE, d, d);
-      g.destroy();
-    }
-
     this.sprite = scene.physics.add.image(x, y, BALL_TEXTURE);
-    this.sprite.setCircle(BALL_RADIUS);
+    // 화면 표시 크기를 BALL_RADIUS 기준으로 맞춘 뒤, 원본 텍스처의 절반 크기를
+    // 로컬(스케일 이전) 반지름으로 지정한다. Arcade의 원형 바디는 오브젝트의
+    // scale이 곱해진 채 적용되므로, 이 둘의 비율이 항상 BALL_RADIUS로 상쇄된다
+    // (텍스처 크기와 무관하게 안전 — Player 히트박스에서 겪었던 스케일 결합 문제 방지).
+    const diameter = BALL_RADIUS * 2;
+    this.sprite.setDisplaySize(diameter, diameter);
+    this.sprite.setCircle(this.sprite.width / 2);
     this.sprite.setBounce(BALL_BOUNCE);
     this.sprite.setCollideWorldBounds(true);
 
@@ -104,14 +98,17 @@ export class Ball {
     return true;
   }
 
-  private computeStrike(playerX: number, playerVelocityX: number): { dir: number; outSpeed: number } {
+  private computeStrike(
+    playerX: number,
+    playerVelocityX: number,
+  ): { dir: number; outSpeed: number } {
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     const dir = this.sprite.x >= playerX ? 1 : -1; // 플레이어에서 공으로 향하는 방향
     const incomingSpeed = Math.abs(body.velocity.x);
     const outSpeed = Math.max(
       incomingSpeed * BALL_BOUNCE,
       Math.abs(playerVelocityX),
-      BALL_MIN_KICK_SPEED
+      BALL_MIN_KICK_SPEED,
     );
     return { dir, outSpeed };
   }
@@ -119,6 +116,6 @@ export class Ball {
   reset(): void {
     this.sprite.setPosition(this.startX, this.startY);
     this.sprite.setVelocity(0, 0);
-    this.sprite.setAngularVelocity(0);
+    this.sprite.rotation = 0;
   }
 }
