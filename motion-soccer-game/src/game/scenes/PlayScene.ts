@@ -8,6 +8,7 @@ import {
   PLAYER_HEIGHT,
   PLAYER_COLOR,
   PLAYER2_COLOR,
+  GOAL_HEIGHT,
   GOAL_COOLDOWN_MS,
   SNAPSHOT_HZ,
   INPUT_HZ,
@@ -42,6 +43,14 @@ import { DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
 // 캐릭터 머리 위 원형 카메라 지름(px). 나/상대 동일.
 const CAM_DIAMETER = 64;
 
+// 미니맵(우하단): 월드가 가로로 넓어(2880x540) 가로로 긴 띠가 된다.
+const MM_WIDTH = 220;
+const MM_MARGIN = 12;
+const MM_SCALE = MM_WIDTH / WORLD_WIDTH; // 월드→미니맵 균일 축척
+const MM_HEIGHT = GAME_HEIGHT * MM_SCALE;
+const MM_X = GAME_WIDTH - MM_WIDTH - MM_MARGIN; // 좌상단 원점
+const MM_Y = GAME_HEIGHT - MM_HEIGHT - MM_MARGIN;
+
 // 3단계: 통합 + 넓은 필드/골대/스코어.
 // - 월드가 뷰포트보다 넓어 카메라가 공을 따라 좌우로 스크롤한다.
 // - 양 끝 골대에 공이 들어가면 해당 스코어가 오른다.
@@ -61,9 +70,8 @@ export class PlayScene extends Phaser.Scene {
   private fpsText!: Phaser.GameObjects.Text;
   private fps = 60;
   private scoreText!: Phaser.GameObjects.Text;
-  // 내 캐릭터가 화면 밖일 때 방향을 가리키는 화살표(+거리) — 화면에 고정.
-  private myArrow!: Phaser.GameObjects.Triangle;
-  private myArrowText!: Phaser.GameObjects.Text;
+  // 미니맵(전체 필드 축소도) — 매 프레임 다시 그린다. 화면에 고정.
+  private minimap!: Phaser.GameObjects.Graphics;
 
   private scoreLeft = 0;
   private scoreRight = 0;
@@ -296,26 +304,9 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setScrollFactor(0);
 
-    // 내 캐릭터가 화면 밖으로 나가면 그 방향을 가리키는 화살표(+거리).
-    // 오른쪽을 가리키는 삼각형으로 만들고, 왼쪽일 땐 회전(π)으로 뒤집는다. 내 색으로.
-    const myColor = this.mode === "guest" ? PLAYER2_COLOR : PLAYER_COLOR;
-    this.myArrow = this.add
-      .triangle(0, 0, 0, -13, 0, 13, 22, 0, myColor)
-      .setScrollFactor(0)
-      .setDepth(1500)
-      .setVisible(false);
-    this.myArrowText = this.add
-      .text(0, 0, "", {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#e0e1dd",
-        backgroundColor: "#00000099",
-        padding: { x: 4, y: 1 },
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(1500)
-      .setVisible(false);
+    // 미니맵: 전체 필드 축소도. 공에 붙어 스크롤되는 카메라 때문에 화면 밖으로 나간
+    // 내 캐릭터 위치를 놓치지 않게 돕는다. 매 프레임 updateMinimap()에서 다시 그린다.
+    this.minimap = this.add.graphics().setScrollFactor(0).setDepth(1500);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       if (this.leaveDebounce !== null) {
@@ -588,39 +579,51 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  // 내 캐릭터가 뷰포트 밖이면 화면 가장자리에 그 방향 화살표(+거리)를 표시한다.
-  // 카메라는 공을 따라가므로 공에서 멀어진 내 캐릭터를 놓치지 않게 돕는다.
-  private updateMyArrow(): void {
+  // 미니맵을 매 프레임 다시 그린다: 배경 → 골대 → 현재 화면(뷰포트) 박스 →
+  // 공·두 캐릭터 도트(내 캐릭터는 흰 테두리로 강조). 화면 밖 캐릭터 위치를 한눈에.
+  private updateMinimap(): void {
+    const g = this.minimap;
+    g.clear();
+
+    // 배경 + 테두리
+    g.fillStyle(0x0b1524, 0.8);
+    g.fillRect(MM_X, MM_Y, MM_WIDTH, MM_HEIGHT);
+    g.lineStyle(1, 0xffffff, 0.25);
+    g.strokeRect(MM_X, MM_Y, MM_WIDTH, MM_HEIGHT);
+
+    // 양 끝 골대(세로 짧은 막대)
+    const groundTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT) * MM_SCALE;
+    const goalTopMap = MM_Y + (GAME_HEIGHT - GROUND_HEIGHT - GOAL_HEIGHT) * MM_SCALE;
+    g.lineStyle(2, 0xffffff, 0.5);
+    g.lineBetween(MM_X + 1, goalTopMap, MM_X + 1, groundTopMap);
+    g.lineBetween(MM_X + MM_WIDTH - 1, goalTopMap, MM_X + MM_WIDTH - 1, groundTopMap);
+
+    // 현재 화면(뷰포트) 박스
     const cam = this.cameras.main;
+    g.lineStyle(1, 0xffd166, 0.9);
+    g.strokeRect(MM_X + cam.scrollX * MM_SCALE, MM_Y, GAME_WIDTH * MM_SCALE, MM_HEIGHT);
+
+    // 공
+    const mapX = (wx: number) => MM_X + wx * MM_SCALE;
+    const mapY = (wy: number) => MM_Y + wy * MM_SCALE;
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(mapX(this.ball.sprite.x), mapY(this.ball.sprite.y), 2.5);
+
+    // 두 캐릭터 도트(내 캐릭터는 흰 테두리로 강조)
     const me = this.mode === "guest" ? this.player2 : this.player1;
-    const x = me.sprite.x;
-    const left = cam.scrollX;
-    const right = cam.scrollX + GAME_WIDTH;
-
-    let show = false;
-    let edgeX = 0;
-    let rot = 0;
-    let dist = 0;
-    if (x < left) {
-      show = true;
-      edgeX = 26;
-      rot = Math.PI; // 왼쪽 가리킴
-      dist = Math.round(left - x);
-    } else if (x > right) {
-      show = true;
-      edgeX = GAME_WIDTH - 26;
-      rot = 0; // 오른쪽 가리킴
-      dist = Math.round(x - right);
+    for (const [p, color] of [
+      [this.player1, PLAYER_COLOR],
+      [this.player2, PLAYER2_COLOR],
+    ] as const) {
+      const px = mapX(p.sprite.x);
+      const py = mapY(p.sprite.y);
+      g.fillStyle(color, 1);
+      g.fillCircle(px, py, 3);
+      if (p === me) {
+        g.lineStyle(1.5, 0xffffff, 1);
+        g.strokeCircle(px, py, 4.5);
+      }
     }
-
-    this.myArrow.setVisible(show);
-    this.myArrowText.setVisible(show);
-    if (!show) return;
-
-    // 화살표의 세로 위치는 내 캐릭터의 화면상 높이에 맞춘다(가장자리 안쪽으로 clamp).
-    const y = Phaser.Math.Clamp(me.sprite.y - cam.scrollY, 44, GAME_HEIGHT - 44);
-    this.myArrow.setPosition(edgeX, y).setRotation(rot);
-    this.myArrowText.setPosition(edgeX, y + 18).setText(`${dist}`);
   }
 
   update(_time: number, delta: number): void {
@@ -663,7 +666,7 @@ export class PlayScene extends Phaser.Scene {
     if (this.matchEnded) return;
 
     this.positionCameras();
-    this.updateMyArrow();
+    this.updateMinimap();
     this.updateStatus();
 
     if (Phaser.Input.Keyboard.JustDown(this.resetKey)) {
