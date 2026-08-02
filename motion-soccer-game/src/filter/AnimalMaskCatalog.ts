@@ -12,7 +12,6 @@ export const ANIMAL_MASKS: AnimalMaskDef[] = [
   { id: "cat", label: "고양이" },
   { id: "bear", label: "곰" },
   { id: "jack_o_lantern", label: "잭오랜턴" },
-  { id: "moai", label: "모아이" },
 ];
 
 export const DEFAULT_ANIMAL_ID = ANIMAL_MASKS[0].id;
@@ -57,7 +56,12 @@ export async function buildAnimalMask(id: string): Promise<THREE.Group> {
         JACK_O_LANTERN_OFFSET,
       );
     case "moai":
-      return loadGltfMask(MOAI_MODEL_URL, MOAI_TARGET_HEIGHT, emptyMask, MOAI_OFFSET);
+      return loadGltfMask(
+        MOAI_MODEL_URL,
+        MOAI_TARGET_HEIGHT,
+        emptyMask,
+        MOAI_OFFSET,
+      );
     case "dog":
     default:
       return loadGltfMask(DOG_MODEL_URL, DOG_TARGET_HEIGHT, buildDog);

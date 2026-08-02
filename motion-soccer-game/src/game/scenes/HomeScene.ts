@@ -3,7 +3,10 @@ import { generateRoomCode, normalizeRoomCode } from "../../net/roomCode";
 import { createSupabaseChannel } from "../../net/SupabaseChannel";
 import { RoomSession, type Role } from "../../net/RoomSession";
 import { MatchmakingClient } from "../../webrtc/MatchmakingClient";
-import { ANIMAL_MASKS, DEFAULT_ANIMAL_ID } from "../../filter/AnimalMaskCatalog";
+import {
+  ANIMAL_MASKS,
+  DEFAULT_ANIMAL_ID,
+} from "../../filter/AnimalMaskCatalog";
 import type { MatchMode } from "../../config";
 
 // 시작 화면: 방 만들기(host) / 코드 입장(guest). 명세 5.1.
@@ -17,6 +20,9 @@ const CSS = `
   display: flex; align-items: center; justify-content: center;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   padding: 16px;
+  background:
+    linear-gradient(rgba(8, 14, 24, 0.6), rgba(8, 14, 24, 0.75)),
+    url("/assets/soccer/stadium_evening.png") center 40% / cover no-repeat;
 }
 .msg-home-card {
   width: 360px; max-width: 100%;
@@ -116,18 +122,28 @@ export class HomeScene extends Phaser.Scene {
   // 초기 로비: 빠른 매칭 / 방 만들기 / 코드 입장.
   private renderLobby(errorMsg?: string): void {
     const card = this.mountCard();
-    card.appendChild(this.el("h1", "msg-home-title", "모션 축구 1v1"));
-    card.appendChild(this.el("p", "msg-home-sub", "웹캠 모션으로 즐기는 실시간 1대1 축구"));
+    card.appendChild(this.el("h1", "msg-home-title", "일대일 축구"));
+    card.appendChild(
+      this.el("p", "msg-home-sub", "웹캠으로 즐기는 실시간 일대일 축구 경기⚽️"),
+    );
 
     // 빠른(랜덤) 매칭 — 메인 액션
-    const quickBtn = this.el("button", "msg-home-btn msg-home-primary", "⚡ 빠른 매칭") as HTMLButtonElement;
+    const quickBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-primary",
+      "⚡ 빠른 매칭",
+    ) as HTMLButtonElement;
     quickBtn.onclick = () => this.onQuickMatch();
     card.appendChild(quickBtn);
 
     card.appendChild(this.el("div", "msg-home-divider", "친구와 하기"));
 
     // 방 만들기
-    const createBtn = this.el("button", "msg-home-btn msg-home-ghost", "방 만들기") as HTMLButtonElement;
+    const createBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-ghost",
+      "방 만들기",
+    ) as HTMLButtonElement;
     createBtn.onclick = () => this.onCreate();
     createBtn.style.marginBottom = "8px";
     card.appendChild(createBtn);
@@ -137,7 +153,11 @@ export class HomeScene extends Phaser.Scene {
     const input = this.el("input", "msg-home-input") as HTMLInputElement;
     input.placeholder = "코드 입력";
     input.maxLength = 8;
-    const joinBtn = this.el("button", "msg-home-btn msg-home-secondary", "입장") as HTMLButtonElement;
+    const joinBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-secondary",
+      "입장",
+    ) as HTMLButtonElement;
     const submit = () => this.onJoin(input.value);
     joinBtn.onclick = submit;
     input.addEventListener("keydown", (e) => {
@@ -153,21 +173,36 @@ export class HomeScene extends Phaser.Scene {
   }
 
   // 경기 방식 선택 화면(방 만들기·빠른 매칭 공용). 고르면 onPick(mode)을 호출한다.
-  private renderModeSelect(subtitle: string, onPick: (mode: MatchMode) => void): void {
+  private renderModeSelect(
+    subtitle: string,
+    onPick: (mode: MatchMode) => void,
+  ): void {
     const card = this.mountCard();
     card.appendChild(this.el("h1", "msg-home-title", "경기 방식 선택"));
     card.appendChild(this.el("p", "msg-home-sub", subtitle));
 
-    const timeBtn = this.el("button", "msg-home-btn msg-home-primary", "⏱ 시간제 · 90초") as HTMLButtonElement;
+    const timeBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-primary",
+      "⏱ 시간제 · 90초",
+    ) as HTMLButtonElement;
     timeBtn.style.marginBottom = "8px";
     timeBtn.onclick = () => onPick("time");
     card.appendChild(timeBtn);
 
-    const scoreBtn = this.el("button", "msg-home-btn msg-home-primary", "🥅 점수제 · 선취 5점") as HTMLButtonElement;
+    const scoreBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-primary",
+      "🥅 점수제 · 선취 5점",
+    ) as HTMLButtonElement;
     scoreBtn.onclick = () => onPick("score");
     card.appendChild(scoreBtn);
 
-    const backBtn = this.el("button", "msg-home-btn msg-home-ghost", "← 뒤로") as HTMLButtonElement;
+    const backBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-ghost",
+      "← 뒤로",
+    ) as HTMLButtonElement;
     backBtn.style.marginTop = "16px";
     backBtn.onclick = () => this.renderLobby();
     card.appendChild(backBtn);
@@ -221,7 +256,11 @@ export class HomeScene extends Phaser.Scene {
     card.appendChild(this.el("p", "msg-home-sub", "랜덤 매칭 대기 중"));
     card.appendChild(this.el("div", "msg-home-spinner"));
 
-    const cancelBtn = this.el("button", "msg-home-btn msg-home-ghost", "취소") as HTMLButtonElement;
+    const cancelBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-ghost",
+      "취소",
+    ) as HTMLButtonElement;
     cancelBtn.style.marginTop = "18px";
     cancelBtn.onclick = () => {
       this.matchmaker?.cancel();
@@ -233,7 +272,9 @@ export class HomeScene extends Phaser.Scene {
 
   // 빠른 매칭 → 방식 선택 → 같은 방식 큐로 매칭.
   private onQuickMatch(): void {
-    this.renderModeSelect("선택한 방식끼리 매칭됩니다", (mode) => this.startQuickMatch(mode));
+    this.renderModeSelect("선택한 방식끼리 매칭됩니다", (mode) =>
+      this.startQuickMatch(mode),
+    );
   }
 
   private startQuickMatch(mode: MatchMode): void {
@@ -246,32 +287,41 @@ export class HomeScene extends Phaser.Scene {
     this.renderMatching();
     const mm = new MatchmakingClient(url);
     this.matchmaker = mm;
-    mm
-      .start(mode, (result) => {
-        mm.cancel(); // 매칭 완료 → 매칭 소켓 정리
-        this.matchmaker = null;
-        this.renderWaiting("매칭 완료!", result.code, "연결하는 중…");
-        void this.enterRoom(result.code, result.role);
-      })
-      .catch((e) => {
-        this.matchmaker = null;
-        this.renderLobby(`매칭 실패: ${e instanceof Error ? e.message : String(e)}`);
-      });
+    mm.start(mode, (result) => {
+      mm.cancel(); // 매칭 완료 → 매칭 소켓 정리
+      this.matchmaker = null;
+      this.renderWaiting("매칭 완료!", result.code, "연결하는 중…");
+      void this.enterRoom(result.code, result.role);
+    }).catch((e) => {
+      this.matchmaker = null;
+      this.renderLobby(
+        `매칭 실패: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
   }
 
   // 대기 화면: 방 코드 + 초대 링크(복사) + 상대 대기.
   private renderWaiting(title: string, code: string, waitMsg: string): void {
     const card = this.mountCard();
     card.appendChild(this.el("h1", "msg-home-title", title));
-    card.appendChild(this.el("p", "msg-home-sub", "친구에게 코드나 링크를 보내세요"));
+    card.appendChild(
+      this.el("p", "msg-home-sub", "친구에게 코드나 링크를 보내세요"),
+    );
     card.appendChild(this.el("div", "msg-home-code", code));
 
     const link = `${window.location.origin}${window.location.pathname}?room=${code}`;
     const linkRow = this.el("div", "msg-home-linkrow");
-    const linkField = this.el("input", "msg-home-linkfield") as HTMLInputElement;
+    const linkField = this.el(
+      "input",
+      "msg-home-linkfield",
+    ) as HTMLInputElement;
     linkField.readOnly = true;
     linkField.value = link;
-    const copyBtn = this.el("button", "msg-home-btn msg-home-secondary", "복사") as HTMLButtonElement;
+    const copyBtn = this.el(
+      "button",
+      "msg-home-btn msg-home-secondary",
+      "복사",
+    ) as HTMLButtonElement;
     copyBtn.onclick = async () => {
       try {
         await navigator.clipboard.writeText(link);
@@ -289,7 +339,9 @@ export class HomeScene extends Phaser.Scene {
   }
 
   private onCreate(): void {
-    this.renderModeSelect("선택하면 방이 만들어집니다", (mode) => this.createRoom(mode));
+    this.renderModeSelect("선택하면 방이 만들어집니다", (mode) =>
+      this.createRoom(mode),
+    );
   }
 
   private onJoin(raw: string): void {
@@ -317,7 +369,9 @@ export class HomeScene extends Phaser.Scene {
       });
       await session.start();
     } catch (e) {
-      this.renderLobby(`연결 실패: ${e instanceof Error ? e.message : String(e)}`);
+      this.renderLobby(
+        `연결 실패: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 

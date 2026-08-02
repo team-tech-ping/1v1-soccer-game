@@ -552,7 +552,7 @@ export class PlayScene extends Phaser.Scene {
     if (!cam) return;
     this.fitCamSquare(cam);
     const owner = cam.getData("owner") as Player;
-    const dy = PLAYER_HEIGHT / 2 + CAM_DIAMETER / 2 + 6; // 머리 위로 살짝
+    const dy = PLAYER_HEIGHT / 2 + CAM_DIAMETER / 2 + 15; // 머리 위로 살짝
     const x = owner.sprite.x;
     const y = owner.sprite.y - dy;
     cam.setPosition(x, y);
@@ -593,7 +593,9 @@ export class PlayScene extends Phaser.Scene {
       ) {
         const side = Math.sign(this.prevBallX - px) || 1;
         this.ball.sprite.x = px + side * halfW;
-        this.ball.sprite.setVelocityX(side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED));
+        this.ball.sprite.setVelocityX(
+          side * Math.max(Math.abs(bb.velocity.x), BALL_MIN_KICK_SPEED),
+        );
         continue;
       }
 
@@ -680,7 +682,7 @@ export class PlayScene extends Phaser.Scene {
     // 공 회전(비주얼): host/guest/local 어느 쪽이든 현재 속도 기준으로 매 프레임 굴린다.
     this.ball.update(delta);
 
-    // 실제 물리가 도는 host/local에서만: 공↔플레이어 충돌 확정 처리 + 바닥 구름 속도 상한.
+    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출 + 스윕 관통 가드.
     if (this.mode !== "guest") {
       this.resolveBallVsPlayers();
       this.ball.capGroundSpeed();
