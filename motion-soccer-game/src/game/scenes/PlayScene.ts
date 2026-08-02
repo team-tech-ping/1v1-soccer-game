@@ -17,6 +17,7 @@ import {
   type MatchMode,
   BALL_RADIUS,
   BALL_MIN_KICK_SPEED,
+  BALL_SQUEEZE_ESCAPE_LIFT,
 } from "../../config";
 import { Field } from "../entities/Field";
 import { Ball } from "../entities/Ball";
@@ -576,6 +577,25 @@ export class PlayScene extends Phaser.Scene {
     const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
     const halfW = PLAYER_WIDTH / 2 + BALL_RADIUS;
     const halfH = PLAYER_HEIGHT / 2 + BALL_RADIUS;
+
+    // (0) 두 몸(또는 몸↔벽) 사이에 낀 경우: 개별 킥으로 좌우를 밀면 무한 핀퐁이 되므로,
+    // 아무도 막을 수 없는 '위'로 빼낸다(수평 속도 0으로 만들어 왕복 자체를 끊는다).
+    let leftPress = bx <= BALL_RADIUS + 2; // 왼쪽 월드 벽
+    let rightPress = bx >= WORLD_WIDTH - BALL_RADIUS - 2; // 오른쪽 월드 벽
+    for (const p of [this.player1, this.player2]) {
+      const dx = bx - p.sprite.x;
+      const vClose = Math.abs(by - p.sprite.y) < halfH;
+      const hClose = Math.abs(dx) < halfW + 2;
+      if (vClose && hClose) {
+        if (dx >= 0) leftPress = true; // 몸이 공의 왼쪽에서 누름
+        else rightPress = true; // 몸이 공의 오른쪽에서 누름
+      }
+    }
+    if (leftPress && rightPress) {
+      this.ball.sprite.setVelocity(0, -BALL_SQUEEZE_ESCAPE_LIFT);
+      this.prevBallX = bx;
+      return;
+    }
 
     for (const p of [this.player1, this.player2]) {
       const px = p.sprite.x;
