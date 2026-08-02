@@ -94,7 +94,6 @@ export class PlayScene extends Phaser.Scene {
   private animalId = DEFAULT_ANIMAL_ID;
   private filterToggleText: Phaser.GameObjects.Text | null = null;
   private filterBusy = false; // 필터 토글 중복 실행 방지(init 시 비동기)
-  private prevBallX = NaN; // 진단용: 공-플레이어 관통(터널링) 감지
 
   constructor() {
     super("Play");
@@ -141,7 +140,6 @@ export class PlayScene extends Phaser.Scene {
     this.faceMask = null;
     this.filterToggleText = null;
     this.filterBusy = false;
-    this.prevBallX = NaN;
   }
 
   create(): void {
@@ -536,29 +534,33 @@ export class PlayScene extends Phaser.Scene {
     this.remoteCam?.setVisible(this.overlaysActive);
   }
 
-  // 진단: 이번 프레임에 공이 플레이어의 한쪽에서 반대쪽으로 '넘어갔는데' 세로로 겹쳐
-  // 있었다면(=몸을 관통) 그 순간의 속도/위치를 로그로 남긴다.
-  private detectTunnel(): void {
+  // 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었는지 감지해, 끼었으면 위로 탈출시킨다.
+  // 좌우 양쪽에서 눌린 공을 Arcade가 분리하려다 한쪽으로 순간이동시켜 '몸을 뚫는' 현상을
+  // 막는다 — 위로는 캐릭터가 못 막으므로 공을 위로 빼내는 게 가장 안정적이다.
+  private relieveSqueeze(): void {
     const bx = this.ball.sprite.x;
     const by = this.ball.sprite.y;
-    if (!Number.isNaN(this.prevBallX)) {
-      for (const [i, p] of [this.player1, this.player2].entries()) {
-        const px = p.sprite.x;
-        const py = p.sprite.y;
-        const vClose = Math.abs(by - py) < PLAYER_HEIGHT / 2 + BALL_RADIUS;
-        const prevSide = Math.sign(this.prevBallX - px);
-        const curSide = Math.sign(bx - px);
-        if (vClose && prevSide !== 0 && curSide !== 0 && prevSide !== curSide) {
-          const bb = this.ball.sprite.body as Phaser.Physics.Arcade.Body;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[tunnel] P${i + 1} 관통! ballV=(${bb.velocity.x.toFixed(0)},${bb.velocity.y.toFixed(0)}) ` +
-              `dy=${(by - py).toFixed(0)} prevDx=${(this.prevBallX - px).toFixed(0)} curDx=${(bx - px).toFixed(0)}`
-          );
-        }
-      }
+    let leftPress = false; // 공의 왼쪽에서 누르는 몸이 있음
+    let rightPress = false; // 공의 오른쪽에서 누르는 몸이 있음
+
+    // 캐릭터 두 명 검사(세로로 겹치고 수평으로 맞닿을 만큼 가까울 때만).
+    for (const p of [this.player1, this.player2]) {
+      const dx = bx - p.sprite.x;
+      const vClose = Math.abs(by - p.sprite.y) < PLAYER_HEIGHT / 2 + BALL_RADIUS - 6;
+      const hClose = Math.abs(dx) < PLAYER_WIDTH / 2 + BALL_RADIUS + 4;
+      if (!(vClose && hClose)) continue;
+      if (dx >= 0) leftPress = true; // 몸이 공보다 왼쪽 → 왼쪽에서 누름
+      else rightPress = true;
     }
-    this.prevBallX = bx;
+
+    // 월드 좌우 벽에 바짝 붙은 것도 한쪽 압력으로 취급(벽↔캐릭터 사이 끼임 포함).
+    if (bx <= BALL_RADIUS + 2) leftPress = true;
+    if (bx >= WORLD_WIDTH - BALL_RADIUS - 2) rightPress = true;
+
+    if (leftPress && rightPress) {
+      // 덜 눌린 쪽으로 살짝 밀며 위로 탈출. 여기선 방향 편향 없이 위로만 빼도 충분.
+      this.ball.escapeUp(0);
+    }
   }
 
   update(_time: number, delta: number): void {
@@ -575,8 +577,8 @@ export class PlayScene extends Phaser.Scene {
     // PoseDetector(motion.poll)와 같은 프레임/타임스탬프로 얼굴 검출도 매 프레임 실행한다.
     this.faceMask?.update(now);
 
-    // 진단: 실제 물리가 도는 host/local에서 공이 플레이어를 관통했는지 감지.
-    if (this.mode !== "guest") this.detectTunnel();
+    // 실제 물리가 도는 host/local에서만: 공이 몸 사이에 끼면 위로 탈출시켜 관통 방지.
+    if (this.mode !== "guest") this.relieveSqueeze();
 
     if (this.mode === "guest") {
       this.updateGuest(now);

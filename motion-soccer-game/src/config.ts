@@ -42,6 +42,9 @@ export const BALL_MAX_VELOCITY_Y = 1400;
 // 플레이어가 공 위에 수직으로 올라탔을 때(스톰프) 옆으로 튕겨나가는 속도/높이.
 export const BALL_STOMP_SPEED = 320;
 export const BALL_STOMP_LIFT = 260;
+// 공이 두 캐릭터(또는 캐릭터↔벽) 사이에 끼었을 때 위로 탈출시키는 속도.
+// 좌우 분리 경합으로 공이 몸을 뚫고 나가는 것을 막는다(위로는 캐릭터가 못 막음).
+export const BALL_SQUEEZE_ESCAPE_LIFT = 520;
 
 // 골대 (필드 양 끝)
 export const GOAL_WIDTH = 50; // 골 감지 영역 가로(px)
