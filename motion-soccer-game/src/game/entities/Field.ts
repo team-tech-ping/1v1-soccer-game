@@ -32,12 +32,8 @@ export class Field {
     const stadiumHeight = WORLD_WIDTH * (stadiumBg.height / stadiumBg.width);
     stadiumBg.setDisplaySize(WORLD_WIDTH, stadiumHeight);
 
-    // 배경 마커: 스크롤이 눈에 보이도록 세로 줄과 중앙선을 그린다.
+    // 배경 마커: 중앙선(하프라인)만 표시한다.
     const deco = scene.add.graphics();
-    deco.lineStyle(2, 0xffffff, 0.05);
-    for (let x = 240; x < WORLD_WIDTH; x += 240) {
-      deco.lineBetween(x, 0, x, groundTop);
-    }
     deco.lineStyle(3, 0xffffff, 0.14);
     deco.lineBetween(WORLD_WIDTH / 2, 0, WORLD_WIDTH / 2, groundTop);
     deco.setDepth(-1);
